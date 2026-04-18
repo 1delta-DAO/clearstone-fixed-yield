@@ -2,9 +2,12 @@ use anchor_lang::prelude::*;
 use dec_num::DNum;
 use exponent_time_curve::math::{exchange_rate_from_ln_implied_rate, fee_rate};
 use precise_number::Number;
-use sy_common::PositionState;
-
-use crate::{cpi_common::CpiAccounts, error::ExponentCoreError, reentrancy::Reentrant};
+use crate::{
+    constants::{VIRTUAL_LP_FLOOR, VIRTUAL_PT, VIRTUAL_SY},
+    cpi_common::CpiAccounts,
+    error::ExponentCoreError,
+    reentrancy::Reentrant,
+};
 
 /// Minimum size of market operations
 /// Used to protect against rounding errors
@@ -52,10 +55,6 @@ pub struct MarketTwo {
     /// Mint for the market's LP tokens
     pub mint_lp: Pubkey,
 
-    /// Holds the LP tokens that are earning emissions
-    /// This is where LP holders "stake" their LP tokens
-    pub token_lp_escrow: Pubkey,
-
     /// Token account that holds PT liquidity
     pub token_pt_escrow: Pubkey,
 
@@ -81,13 +80,7 @@ pub struct MarketTwo {
 
     pub financials: MarketFinancials,
 
-    pub emissions: MarketEmissions,
-
-    pub lp_farm: LpFarm,
-
     pub max_lp_supply: u64,
-
-    pub lp_escrow_amount: u64,
 
     /// Record of CPI accounts
     pub cpi_accounts: CpiAccounts,
@@ -148,17 +141,9 @@ impl MarketTwo {
         lp_supply <= self.max_lp_supply
     }
 
-    pub fn size_of(
-        cpi_accounts: &CpiAccounts,
-        emissions_len: usize,
-        farm_emissions_len: usize,
-    ) -> usize {
+    pub fn size_of(cpi_accounts: &CpiAccounts) -> usize {
         // Get size of dynamic vectors in the CpiAccounts struct
         let cpi_accounts_size = cpi_accounts.try_to_vec().unwrap().len();
-
-        let emissions_size = MarketEmissions::size_of_static(emissions_len);
-
-        let farms_size = LpFarm::size_of_static(farm_emissions_len);
 
         // discriminator
         8 +
@@ -185,9 +170,6 @@ impl MarketTwo {
         32 +
 
         // mint_lp
-        32 +
-
-        // escrow_lp
         32 +
 
         // token_escrow_pt
@@ -217,18 +199,14 @@ impl MarketTwo {
         // market_financials size
         MarketFinancials::SIZE_OF +
 
-        emissions_size +
-
-        farms_size +
-
         // max_lp_supply
-        8 +
-
-        // lp_escrow_amount
         8 +
 
         // cpi_accounts size
         cpi_accounts_size +
+
+        // is_current_flash_swap
+        1 +
 
         // liquidity_net_balance_limits
         LiquidityNetBalanceLimits::SIZE_OF +
@@ -261,7 +239,6 @@ impl MarketTwo {
         mint_lp: Pubkey,
         token_pt_escrow: Pubkey,
         token_sy_escrow: Pubkey,
-        token_lp_escrow: Pubkey,
         address_lookup_table: Pubkey,
         token_fee_treasury_sy: Pubkey,
         sy_program: Pubkey,
@@ -271,10 +248,11 @@ impl MarketTwo {
         curator: Pubkey,
         creator_fee_bps: u16,
     ) -> Self {
-        // Calculate quantity of asset represented by SY tokens
-        let asset = Number::from(sy_init) * sy_exchange_rate;
-        // floor down
-        let asset = asset.floor_u64();
+        // Curve math uses virtualized reserves. Seed the initial implied rate
+        // from the same virtualized view so subsequent trades stay consistent.
+        let asset_v = (Number::from(sy_init.saturating_add(VIRTUAL_SY)) * sy_exchange_rate)
+            .floor_u64();
+        let pt_v = pt_init.saturating_add(VIRTUAL_PT);
 
         // get seconds remaining until expiry
         let sec_remaining = expiration_ts
@@ -286,14 +264,12 @@ impl MarketTwo {
 
         // calculate implied rate (APY) based on state of curve
         let ln_implied_rate = exponent_time_curve::math::ln_implied_rate(
-            pt_init,
-            asset,
+            pt_v,
+            asset_v,
             rate_scalar,
             init_rate_anchor.into(),
             sec_remaining,
         );
-
-        let emissions = MarketEmissions::default();
 
         let financials = MarketFinancials {
             expiration_ts,
@@ -317,7 +293,6 @@ impl MarketTwo {
             mint_sy,
             vault,
             mint_lp,
-            token_lp_escrow,
             token_pt_escrow,
             token_sy_escrow,
             token_fee_treasury_sy,
@@ -325,12 +300,9 @@ impl MarketTwo {
             address_lookup_table,
             sy_program,
             financials,
-            emissions,
             max_lp_supply: u64::MAX,
             // default status is all on
             status_flags: ALL_FLAGS,
-            lp_farm: LpFarm::default(),
-            lp_escrow_amount: 0,
             fee_treasury_sy_bps: treasury_fee_bps,
             is_current_flash_swap: false,
             liquidity_net_balance_limits: LiquidityNetBalanceLimits {
@@ -342,34 +314,6 @@ impl MarketTwo {
             },
             seed_id: [seed_id],
         }
-    }
-
-    pub fn update_emissions_from_position_state(
-        &mut self,
-        position_state: &PositionState,
-        lp_staked: u64,
-    ) {
-        for (index, current_position) in position_state.emissions.iter().enumerate() {
-            let difference =
-                current_position.amount_claimable - self.emissions.trackers[index].last_seen_staged;
-
-            let amount_to_increase = Number::from_natural_u64(difference)
-                .checked_div(&Number::from_natural_u64(lp_staked))
-                .unwrap_or(Number::ZERO);
-
-            self.emissions.trackers[index].lp_share_index += amount_to_increase;
-
-            self.emissions.trackers[index].last_seen_staged = current_position.amount_claimable;
-        }
-    }
-
-    pub fn add_farm(&mut self, token_rate: u64, expiry_ts: u32, token_mint: &Pubkey) {
-        self.lp_farm.farm_emissions.push(FarmEmission {
-            mint: *token_mint,
-            token_rate,
-            expiry_timestamp: expiry_ts,
-            index: Number::ZERO,
-        })
     }
 }
 
@@ -430,18 +374,32 @@ impl MarketFinancials {
         self.expiration_ts.saturating_sub(now)
     }
 
-    /// Calculate asset balance from the SY balance and exchange rate
-    fn asset_balance(&self, sy_exchange_rate: Number) -> Number {
-        Number::from_natural_u64(self.sy_balance) * sy_exchange_rate
+    /// Blue-style virtualized PT reserve. All curve math sees this; only the
+    /// actual on-chain token movements touch `pt_balance` directly.
+    /// See PLAN §6.4.
+    #[inline]
+    pub fn v_pt_balance(&self) -> u64 {
+        self.pt_balance.saturating_add(VIRTUAL_PT)
     }
 
-    /// Calculate the current rate anchor
+    /// Virtualized SY reserve — same rationale as `v_pt_balance`.
+    #[inline]
+    pub fn v_sy_balance(&self) -> u64 {
+        self.sy_balance.saturating_add(VIRTUAL_SY)
+    }
+
+    /// Calculate asset balance from the (virtualized) SY balance and exchange rate
+    fn asset_balance(&self, sy_exchange_rate: Number) -> Number {
+        Number::from_natural_u64(self.v_sy_balance()) * sy_exchange_rate
+    }
+
+    /// Calculate the current rate anchor (uses virtualized reserves).
     fn current_rate_anchor(&self, sy_exchange_rate: Number, now: u64) -> f64 {
         let sec_remaining = self.sec_remaining(now);
         let asset = self.asset_balance(sy_exchange_rate).floor_u64();
         let current_rate_scalar = self.current_rate_scalar(now);
         exponent_time_curve::math::find_rate_anchor(
-            self.pt_balance,
+            self.v_pt_balance(),
             asset,
             current_rate_scalar,
             self.last_ln_implied_rate.into(),
@@ -498,9 +456,9 @@ impl MarketFinancials {
         let current_rate_anchor = self.current_rate_anchor(sy_exchange_rate, now);
         let current_fee_rate = self.cur_fee_rate(now);
 
-        // Calculate the trade result
+        // Calculate the trade result — curve sees virtualized pt.
         let trade_result = exponent_time_curve::math::trade(
-            self.pt_balance,
+            self.v_pt_balance(),
             asset_balance,
             current_rate_scalar,
             current_rate_anchor,
@@ -545,9 +503,10 @@ impl MarketFinancials {
         // Deduct treasury fee from SY balance
         self.dec_sy_balance(treasury_fee_amount);
 
-        // set the new ln implied rate based on the new proportion AFTER all balance adjustments
+        // set the new ln implied rate based on the new proportion AFTER all balance adjustments.
+        // Uses virtualized reserves so the implied rate is stable against donation attacks.
         let new_ln_implied_rate = exponent_time_curve::math::ln_implied_rate(
-            self.pt_balance,
+            self.v_pt_balance(),
             self.asset_balance(sy_exchange_rate).floor_u64(),
             current_rate_scalar,
             current_rate_anchor,
@@ -577,20 +536,18 @@ impl MarketFinancials {
         sy_exchange_rate: Number,
         lp_supply: u64,
     ) -> f64 {
-        // Convert SY balance to asset value
-        let sy_asset_value = Number::from_natural_u64(self.sy_balance) * sy_exchange_rate;
+        // Virtualized reserves for pricing; virtualized LP supply to match.
+        let sy_asset_value = Number::from_natural_u64(self.v_sy_balance()) * sy_exchange_rate;
 
         let exchange_rate = self.exchange_rate(unix_timestamp);
         let pt_exchange_rate =
             Number::from_ratio((exchange_rate * 1e18) as u128, 1_000_000_000_000_000_000);
 
-        // Convert PT balance to asset value using Number for precision
-        let pt_balance = Number::from_natural_u64(self.pt_balance);
+        let pt_balance = Number::from_natural_u64(self.v_pt_balance());
         let pt_asset_value = pt_balance / pt_exchange_rate;
 
-        // Calculate total TVL and price per LP token using Number
         let liquidity_pool_tvl = sy_asset_value + pt_asset_value;
-        let lp_supply = Number::from_natural_u64(lp_supply);
+        let lp_supply = Number::from_natural_u64(lp_supply.saturating_add(VIRTUAL_LP_FLOOR));
         let price = liquidity_pool_tvl / lp_supply;
 
         price.to_f64().unwrap()
@@ -602,15 +559,16 @@ impl MarketFinancials {
         pt_intent: u64,
         lp_supply: u64,
     ) -> LiqAddResult {
-        // assert!(sy_intent >= MIN_TX_SIZE, "SY intent too small");
-        // assert!(pt_intent >= MIN_TX_SIZE, "PT intent too small");
-
+        // Curve sees (reserves + virtual, lp_supply + virtual_floor). The
+        // returned lp_tokens_out is the delta in virtual-LP supply, which
+        // equals the real delta (the virtual floor doesn't move), so it's
+        // also the correct amount to mint. See PLAN §6.4.
         let r = exponent_time_curve::math::add_liquidity::<f64>(
             sy_intent,
             pt_intent,
-            lp_supply,
-            self.sy_balance,
-            self.pt_balance,
+            lp_supply.saturating_add(VIRTUAL_LP_FLOOR),
+            self.v_sy_balance(),
+            self.v_pt_balance(),
         );
 
         self.inc_pt_balance(r.pt_in);
@@ -624,33 +582,40 @@ impl MarketFinancials {
     }
 
     pub fn rm_liquidity(&mut self, lp_in: u64, lp_supply: u64) -> LiqRmResult {
-        // assert!(lp_in >= MIN_TX_SIZE, "LP intent too small");
         assert!(lp_in <= lp_supply, "LP intent too large");
 
+        // Proportional withdrawal against virtualized reserves / virtualized
+        // supply — this is what keeps the virtual floor effective as liquidity
+        // shrinks.
         let r = exponent_time_curve::math::rm_liquidity::<f64>(
             lp_in,
-            lp_supply,
-            self.sy_balance,
-            self.pt_balance,
+            lp_supply.saturating_add(VIRTUAL_LP_FLOOR),
+            self.v_sy_balance(),
+            self.v_pt_balance(),
         );
 
-        self.dec_pt_balance(r.pt_out);
-        self.dec_sy_balance(r.sy_out);
+        // Outputs from the virtualized formula are computed against virtual
+        // reserves, so they could in theory exceed the real balance when the
+        // pool is nearly empty. Clamp to the real reserve to guarantee we
+        // never pay out more than we hold.
+        let pt_out = r.pt_out.min(self.pt_balance);
+        let sy_out = r.sy_out.min(self.sy_balance);
 
-        LiqRmResult {
-            pt_out: r.pt_out,
-            sy_out: r.sy_out,
-        }
+        self.dec_pt_balance(pt_out);
+        self.dec_sy_balance(sy_out);
+
+        LiqRmResult { pt_out, sy_out }
     }
 
-    /// Calc amount of SY owned by LP tokens
+    /// Calc amount of SY owned by LP tokens (virtualized reserves).
     pub fn lp_to_sy(&self, lp_amount: u64, lp_supply: u64) -> u64 {
-        exponent_time_curve::math::lp_to_sy::<f64>(
+        let sy_out = exponent_time_curve::math::lp_to_sy::<f64>(
             lp_amount,
-            lp_supply,
-            self.sy_balance,
-            self.pt_balance,
-        )
+            lp_supply.saturating_add(VIRTUAL_LP_FLOOR),
+            self.v_sy_balance(),
+            self.v_pt_balance(),
+        );
+        sy_out.min(self.sy_balance)
     }
 }
 
@@ -820,62 +785,6 @@ impl LiquidityNetBalanceLimits {
     }
 }
 
-#[derive(AnchorDeserialize, AnchorSerialize, Default, Clone)]
-pub struct MarketEmissions {
-    pub trackers: Vec<MarketEmission>,
-}
-
-impl MarketEmissions {
-    pub fn size_of(&self) -> usize {
-        Self::size_of_static(self.trackers.len())
-    }
-
-    fn size_of_static(tracker_len: usize) -> usize {
-        // vec len
-        4 + tracker_len * MarketEmission::SIZE
-    }
-
-    pub fn get_last_seen_indices(&self) -> Vec<Number> {
-        self.trackers
-            .iter()
-            .map(|emission| emission.lp_share_index)
-            .collect()
-    }
-
-    pub fn add_emission(&mut self, token_escrow: Pubkey) {
-        self.trackers.push(MarketEmission {
-            token_escrow,
-            lp_share_index: Number::ZERO,
-            last_seen_staged: 0,
-        });
-    }
-}
-
-#[derive(AnchorDeserialize, AnchorSerialize, Default, Clone)]
-pub struct MarketEmission {
-    /// Escrow account that receives the emissions from the SY program
-    /// And then passes them through to the user
-    pub token_escrow: Pubkey,
-
-    /// Index for converting LP shares into earned emissions
-    pub lp_share_index: Number,
-
-    /// The difference between the staged amount and collected emission amount
-    pub last_seen_staged: u64,
-}
-
-impl MarketEmission {
-    const SIZE: usize =
-        // token_escrow
-        32 +
-
-        // lp_share_index
-        Number::SIZEOF +
-
-        // last_seen_staged
-        8;
-}
-
 pub struct LiqAddResult {
     pub pt_in: u64,
     pub sy_in: u64,
@@ -885,96 +794,4 @@ pub struct LiqAddResult {
 pub struct LiqRmResult {
     pub pt_out: u64,
     pub sy_out: u64,
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
-pub struct LpFarm {
-    pub last_seen_timestamp: u32,
-    pub farm_emissions: Vec<FarmEmission>,
-}
-
-impl LpFarm {
-    pub fn size_of_static(farm_emissions_len: usize) -> usize {
-        // last_seen_timestamp
-        4 +
-        // vec len
-        4 + farm_emissions_len * FarmEmission::SIZE
-    }
-
-    pub fn get_last_seen_indices(&self) -> Vec<Number> {
-        self.farm_emissions
-            .iter()
-            .map(|emission| emission.index)
-            .collect()
-    }
-
-    pub fn find_farm_emission_position(&self, mint: Pubkey) -> Option<usize> {
-        self.farm_emissions
-            .iter()
-            .position(|emission| emission.mint == mint)
-    }
-
-    /// Increase the share indexes for all the farm's emissions
-    pub fn increase_share_indexes(&mut self, current_timestamp: u32, lp_staked: u64) {
-        for emission in self.farm_emissions.iter_mut() {
-            // calculate the time delta based on the emission's expiration
-            // the global last seen timestamp
-            // and the current timestamp
-
-            // if last_seen_timestamp >= min(expiry_timestamp, current_timestamp), this function returns 0
-            let time_delta = delta_time_farm(
-                emission.expiry_timestamp,
-                self.last_seen_timestamp,
-                current_timestamp,
-            );
-
-            emission.inc_index(time_delta, lp_staked);
-        }
-
-        self.last_seen_timestamp = current_timestamp;
-    }
-}
-
-/// Calculate the delta given the farm's expiration, the farm's last seen timestamp, and the current timestamp
-fn delta_time_farm(expiry_timestamp: u32, last_seen_timestamp: u32, current_timestamp: u32) -> u32 {
-    // treat "now" as the lesser of the expiry or the current timestamp
-    // this handles the case where the farm has expired
-    let now = expiry_timestamp.min(current_timestamp);
-
-    // if last seen is greater than or equal to now, return 0
-    if last_seen_timestamp >= now {
-        return 0;
-    }
-
-    now - last_seen_timestamp
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
-pub struct FarmEmission {
-    /// Mint for the emission token
-    pub mint: Pubkey,
-    /// Rate at which the emission token is emitted per second
-    pub token_rate: u64,
-    /// Expiration timestamp for the emission token
-    pub expiry_timestamp: u32,
-    /// Index for converting LP shares into earned emissions
-    pub index: Number,
-}
-
-impl FarmEmission {
-    pub const SIZE: usize =
-        // mint
-        32 +
-        // token_rate
-        8 +
-        // expiry_timestamp
-        4 +
-        // index
-        Number::SIZEOF;
-
-    fn inc_index(&mut self, time_delta: u32, lp_staked: u64) {
-        let tokens_emitted = self.token_rate * time_delta as u64;
-        let increase_amount = Number::from_ratio(tokens_emitted.into(), lp_staked.into());
-        self.index += increase_amount;
-    }
 }

@@ -15,6 +15,21 @@ pub const MIN_DURATION_SECONDS: u32 = 24 * 3600; // 1 day
 pub const MAX_DURATION_SECONDS: u32 = 5 * 365 * 24 * 3600; // 5 years
 
 /// Blue-style virtual-reserve floors. Used by the AMM to prevent first-LP
-/// sandwich attacks and dust-inflation exploits. Applied in M3.
+/// sandwich attacks and dust-inflation exploits.
+///
+/// The AMM math operates on (pt_balance + VIRTUAL_PT, sy_balance + VIRTUAL_SY)
+/// so that:
+///   - A 1-wei donation to the reserve accounts cannot meaningfully shift
+///     the exchange rate (the virtual term dominates).
+///   - The first LP sees a fixed `VIRTUAL_LP_FLOOR` "burned" into the mint
+///     supply, closing the classic zero-supply sandwich hole.
+///
+/// Chosen at 1_000_000: large enough that dust donations are insignificant,
+/// small enough that real liquidity quickly dominates for any realistic pool.
 pub const VIRTUAL_PT: u64 = 1_000_000;
 pub const VIRTUAL_SY: u64 = 1_000_000;
+
+/// sqrt(VIRTUAL_PT * VIRTUAL_SY) — the initial LP floor that never appears
+/// in user-held LP but participates in every proportional calculation. With
+/// VP = VS = 1_000_000, this is exactly 1_000_000 (integer sqrt).
+pub const VIRTUAL_LP_FLOOR: u64 = 1_000_000;

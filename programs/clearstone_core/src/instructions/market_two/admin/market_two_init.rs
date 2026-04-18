@@ -1,5 +1,5 @@
 use crate::{
-    constants::PROTOCOL_FEE_MAX_BPS,
+    constants::{PROTOCOL_FEE_MAX_BPS, VIRTUAL_LP_FLOOR, VIRTUAL_PT, VIRTUAL_SY},
     cpi_common::CpiAccounts,
     error::ExponentCoreError,
     seeds::MARKET_SEED,
@@ -42,7 +42,7 @@ pub struct MarketTwoInit<'info> {
             &[seed_id],
         ],
         bump,
-        space = MarketTwo::size_of(&cpi_accounts, 0, 0)
+        space = MarketTwo::size_of(&cpi_accounts)
     )]
     pub market: Account<'info, MarketTwo>,
 
@@ -71,11 +71,6 @@ pub struct MarketTwoInit<'info> {
     /// CHECK: created and validated in handler
     #[account(mut)]
     pub escrow_sy: UncheckedAccount<'info>,
-
-    /// Holds activated LP tokens for farming & SY emissions
-    /// CHECK: created and validated in handler
-    #[account(mut)]
-    pub escrow_lp: UncheckedAccount<'info>,
 
     /// Signer's PT token account
     #[account(mut)]
@@ -241,15 +236,6 @@ impl<'i> MarketTwoInit<'i> {
             b"escrow_sy",
         )
     }
-
-    fn create_escrow_lp(&self) -> Result<Pubkey> {
-        self.create_market_token_account(
-            &self.mint_lp.to_account_info(),
-            &self.escrow_lp.to_account_info(),
-            b"escrow_lp",
-        )
-    }
-
 }
 
 /// Create a market struct from the raw arguments
@@ -276,7 +262,6 @@ pub fn make_market(
     let token_escrow_sy = ctx.accounts.escrow_sy.key();
     let token_escrow_pt = ctx.accounts.escrow_pt.key();
     let sy_program = ctx.accounts.sy_program.key();
-    let escrow_lp = ctx.accounts.escrow_lp.key();
 
     MarketTwo::new(
         ctx.accounts.market.key(),
@@ -294,7 +279,6 @@ pub fn make_market(
         mint_lp,
         token_escrow_pt,
         token_escrow_sy,
-        escrow_lp,
         ctx.accounts.address_lookup_table.key(),
         token_treasury_fee_sy,
         sy_program,
@@ -377,9 +361,6 @@ pub fn handler<'info>(
     // token account for passing SY to the SY program and back
     ctx.accounts.create_escrow_sy()?;
 
-    // token account to hold deposited LP tokens for earning emissions
-    ctx.accounts.create_escrow_lp()?;
-
     // create a token account for the receiver's LP tokens
     // we must do this in the instruction because the Mint is created in this instruction
     ctx.accounts.create_payer_lp_account()?;
@@ -408,13 +389,22 @@ pub fn handler<'info>(
     Ok(())
 }
 
-/// compute the geometric mean of pt & sy.
-/// this is the amount of LP tokens to mint
+/// Initial LP mint — Morpho-Blue-style virtualized formula.
+///
+///     lp_out = sqrt((pt_in + VIRTUAL_PT) * (sy_in + VIRTUAL_SY)) - VIRTUAL_LP_FLOOR
+///
+/// The `- VIRTUAL_LP_FLOOR` term is the implicit "burned" floor that
+/// participates in every subsequent proportional calculation but is never
+/// held by any real account. It closes the classic first-LP sandwich hole
+/// and the 1-wei donation attack. See PLAN §6.4.
+///
+/// Panics on overflow; callers validate pt_init/sy_init sizes.
 fn calc_lp_tokens_out(pt_in: u64, sy_in: u64) -> u64 {
-    let product = pt_in
-        .checked_mul(sy_in)
-        .expect("Overflow occurred during multiplication");
-
-    // Compute the square root safely
-    (product as f64).sqrt() as u64
+    let pt_v = (pt_in as u128).saturating_add(VIRTUAL_PT as u128);
+    let sy_v = (sy_in as u128).saturating_add(VIRTUAL_SY as u128);
+    let product = pt_v
+        .checked_mul(sy_v)
+        .expect("Overflow computing virtualized LP product");
+    let total_virtual_lp = (product as f64).sqrt() as u64;
+    total_virtual_lp.saturating_sub(VIRTUAL_LP_FLOOR)
 }

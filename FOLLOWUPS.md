@@ -2,6 +2,38 @@
 
 Tracked deviations from PLAN.md. Each entry: which milestone left it, why, and what it would take to close.
 
+## M4 — Periphery programs not yet built
+
+Core is now slim: wrappers, farms, market-level emissions, LP staking, and
+the admin-side `add_emission` / `add_market_emission` instructions were all
+deleted. They need to re-land somewhere before mainnet if the feature set
+is to match Exponent Core's. Concretely:
+
+- **Router (`clearstone_router`)** — replacement for the twelve deleted
+  `wrapper_*` instructions (provide_liquidity / buy_pt / sell_pt / buy_yt /
+  sell_yt / collect_interest / withdraw_liquidity / withdraw_liquidity_classic /
+  provide_liquidity_base / provide_liquidity_classic / strip / merge). Each
+  existed to wrap "mint SY → core op → redeem SY" into a single transaction
+  so users never handle raw SY. The router re-implements them as CPI chains
+  into `clearstone_core`'s base primitives (strip, merge, trade_pt,
+  deposit_liquidity, withdraw_liquidity). PLAN §5 architecture diagram.
+
+- **Rewards (`clearstone_rewards`)** — replacement for the deleted
+  `LpFarm` / `MarketEmissions` / `claim_farm_emissions` / `market_collect_emission`
+  / `add_farm` / `modify_farm` / `add_market_emission`. The periphery owns
+  its own `farm_state` and `market_emission_state` accounts keyed by market
+  pubkey; users stake LP tokens there for emissions. Core knows nothing
+  about it.
+
+- **Vault-level emissions** — kept on `Vault.emissions: Vec<EmissionInfo>`
+  per §10 Q4 recommendation. The admin-side `add_emission` was deleted in
+  M4; emissions now need to be seeded at vault init (pass the list as a
+  handler param) or via a `modify_vault_setting` variant. Neither is wired
+  yet. Low priority: SY programs that don't emit extra tokens work fine;
+  the path is only needed for yield-bearing SYs that distribute rewards.
+
+## M3 — Virtual-share fuzz tests
+
 ## M2 — Reentrancy guard coverage is partial
 
 **State.** `reentrancy::enter → persist → CPI → reload → leave` is wired in five
@@ -55,6 +87,27 @@ instructions get coverage for free. This is a mechanical but broad change
 (29 callsites).
 
 The I-C1 invariant in PLAN.md §3 requires full coverage before M8 audit.
+
+## M3 — Virtual-share fuzz tests
+
+Plan exit criterion: "fuzz test: first-deposit sandwich attempt leaves
+attacker with strictly less than they started. 1-wei donation attack does
+not shift exchange rate beyond epsilon." Not built — no tests exist beyond
+the placeholder. Ships with the M6 integration suite: parametric first-LP
+sandwich + donation-attack scenarios exercised against
+[state/market_two.rs](programs/clearstone_core/src/state/market_two.rs)'s
+virtualized `add_liquidity`, `rm_liquidity`, and `trade_pt`.
+
+## M3 — Virtualized rm_liquidity / lp_to_sy clamp
+
+Because the curve math runs on `(reserves + virtual)` while the escrow only
+holds `reserves`, the pure formula can return `pt_out > pt_balance` or
+`sy_out > sy_balance` on nearly-drained pools. [state/market_two.rs rm_liquidity](programs/clearstone_core/src/state/market_two.rs)
+clamps outputs to the real reserve floor. That clamp is a safety net, not a
+first-class correctness property — if the LP supply and real reserves ever
+desync enough to trigger it, the LP holder takes a slightly smaller
+withdrawal than the pro-rata share. Worth checking during M6 fuzz + before
+audit whether this shows up in practice at realistic liquidity sizes.
 
 ## M2 — Reentrancy test harness
 

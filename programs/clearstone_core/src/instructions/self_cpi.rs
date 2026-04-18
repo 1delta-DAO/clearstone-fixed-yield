@@ -2,19 +2,14 @@ use crate::{
     __cpi_client_accounts_buy_yt::BuyYt,
     __cpi_client_accounts_collect_interest::CollectInterest,
     __cpi_client_accounts_deposit_liquidity::DepositLiquidity,
-    __cpi_client_accounts_deposit_lp::DepositLp,
     __cpi_client_accounts_deposit_yt::DepositYt,
     __cpi_client_accounts_merge::Merge,
     __cpi_client_accounts_sell_yt::SellYt,
     __cpi_client_accounts_strip::Strip,
     __cpi_client_accounts_trade_pt::TradePt,
     __cpi_client_accounts_withdraw_liquidity::WithdrawLiquidity,
-    __cpi_client_accounts_withdraw_lp::WithdrawLp,
     __cpi_client_accounts_withdraw_yt::WithdrawYt,
-    instructions::{
-        CollectInterestEventV2, DepositLpEventV2, DepositYtEventV2, WithdrawLpEventV2,
-        WithdrawYtEventV2,
-    },
+    instructions::{CollectInterestEventV2, DepositYtEventV2, WithdrawYtEventV2},
     ID,
 };
 use amount_value::Amount;
@@ -40,8 +35,6 @@ pub type DepositLiquidityAccounts<'i> = DepositLiquidity<'i>;
 pub type WithdrawLiquidityAccounts<'i> = WithdrawLiquidity<'i>;
 pub type DepositYtAccounts<'i> = DepositYt<'i>;
 pub type _WithdrawYtAccounts<'i> = WithdrawYt<'i>;
-pub type DepositLpAccounts<'i> = DepositLp<'i>;
-pub type WithdrawLpAccounts<'i> = WithdrawLp<'i>;
 pub type CollectInterestAccounts<'i> = CollectInterest<'i>;
 
 pub fn do_cpi_deposit_yt<'i>(
@@ -90,22 +83,6 @@ pub fn do_cpi_deposit_liquidity<'i>(
     data.extend(&pt_intent.to_le_bytes());
     data.extend(&sy_intent.to_le_bytes());
     data.extend(&min_lp_out.to_le_bytes());
-
-    do_cpi(accounts, remaining_accounts, data)?;
-
-    deser_return_data()
-}
-
-pub fn do_cpi_deposit_lp<'i>(
-    accounts: DepositLpAccounts<'i>,
-    remaining_accounts: &[AccountInfo<'i>],
-    amount_lp: u64,
-) -> Result<DepositLpEventV2> {
-    let mut data: Vec<u8> = vec![];
-
-    let discriminator = [14];
-    data.extend_from_slice(discriminator.as_slice());
-    data.extend(&amount_lp.to_le_bytes());
 
     do_cpi(accounts, remaining_accounts, data)?;
 
@@ -208,22 +185,6 @@ pub fn do_cpi_sell_yt<'i>(
     data.extend_from_slice(discriminator.as_slice());
     data.extend(&yt_in.to_le_bytes());
     data.extend(&min_sy_out.to_le_bytes());
-
-    do_cpi(accounts, remaining_accounts, data)?;
-
-    deser_return_data()
-}
-
-pub fn do_cpi_withdraw_lp<'i>(
-    accounts: WithdrawLpAccounts<'i>,
-    remaining_accounts: &[AccountInfo<'i>],
-    amount: u64,
-) -> Result<WithdrawLpEventV2> {
-    let mut data: Vec<u8> = vec![];
-
-    let discriminator = [15];
-    data.extend_from_slice(discriminator.as_slice());
-    data.extend(&amount.to_le_bytes());
 
     do_cpi(accounts, remaining_accounts, data)?;
 

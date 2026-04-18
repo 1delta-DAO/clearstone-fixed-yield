@@ -4,7 +4,7 @@ use crate::{
     reentrancy,
     state::MarketTwo,
     util::token_transfer,
-    utils::{do_deposit_sy, do_get_sy_state, do_withdraw_sy, sy_cpi::validate_sy_state},
+    utils::{do_deposit_sy, do_get_sy_state, do_withdraw_sy},
     STATUS_CAN_BUY_PT, STATUS_CAN_SELL_PT,
 };
 use anchor_lang::prelude::*;
@@ -181,7 +181,11 @@ pub fn handler<'info>(
         ctx.accounts.sy_program.key(),
     )?;
     ctx.accounts.market.reload()?;
-    validate_sy_state(&sy_state, ctx.accounts.market.emissions.trackers.len())?;
+    // Markets don't track emissions after M4, so only validate exchange_rate here.
+    require!(
+        sy_state.exchange_rate > Number::ZERO,
+        ExponentCoreError::SyInvalidExchangeRate
+    );
     let sy_exchange_rate = sy_state.exchange_rate;
 
     let is_current_flash_swap = ctx.accounts.market.is_current_flash_swap;

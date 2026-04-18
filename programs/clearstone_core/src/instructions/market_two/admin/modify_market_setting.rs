@@ -21,7 +21,6 @@ pub enum MarketAdminAction {
         window_duration_seconds: u32,
     },
     ChangeAddressLookupTable(Pubkey),
-    RemoveMarketEmission(u8),
 }
 
 #[derive(Accounts)]
@@ -54,11 +53,7 @@ pub fn handler(ctx: Context<ModifyMarketSetting>, action: MarketAdminAction) -> 
         }
         MarketAdminAction::ChangeCpiAccounts { cpi_accounts } => {
             let old_size = market.to_account_info().data_len();
-            let new_size = MarketTwo::size_of(
-                &cpi_accounts,
-                market.emissions.trackers.len(),
-                market.lp_farm.farm_emissions.len(),
-            );
+            let new_size = MarketTwo::size_of(&cpi_accounts);
 
             if new_size > old_size {
                 let additional_rent = Rent::get()?.minimum_balance(new_size - old_size);
@@ -94,9 +89,6 @@ pub fn handler(ctx: Context<ModifyMarketSetting>, action: MarketAdminAction) -> 
         }
         MarketAdminAction::ChangeAddressLookupTable(address_lookup_table) => {
             market.address_lookup_table = address_lookup_table;
-        }
-        MarketAdminAction::RemoveMarketEmission(emission_index) => {
-            market.emissions.trackers.remove(emission_index as usize);
         }
     }
     Ok(())

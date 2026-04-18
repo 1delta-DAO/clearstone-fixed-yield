@@ -173,33 +173,6 @@ pub mod clearstone_core {
         instructions::market_two::withdraw_liquidity::handler(ctx, lp_in, min_pt_out, min_sy_out)
     }
 
-    /// Initialize a LP position for a user to deposit LP tokens into
-    #[instruction(discriminator = [13])]
-    pub fn init_lp_position(ctx: Context<InitLpPosition>) -> Result<InitLpPositionEvent> {
-        instructions::market_two::init_lp_position::handler(ctx)
-    }
-
-    /// Deposit LP tokens into a personal LP position account
-    #[instruction(discriminator = [14])]
-    pub fn market_deposit_lp(ctx: Context<DepositLp>, amount: u64) -> Result<DepositLpEventV2> {
-        instructions::market_two::deposit_lp::handler(ctx, amount)
-    }
-
-    /// Withdraw LP tokens from personal LP position account
-    #[instruction(discriminator = [15])]
-    pub fn market_withdraw_lp(ctx: Context<WithdrawLp>, amount: u64) -> Result<WithdrawLpEventV2> {
-        instructions::market_two::withdraw_lp::handler(ctx, amount)
-    }
-
-    /// Collect a staged emission
-    #[instruction(discriminator = [16])]
-    pub fn market_collect_emission(
-        ctx: Context<MarketCollectEmission>,
-        emission_index: u16,
-    ) -> Result<MarketCollectEmissionEventV2> {
-        instructions::market_two::market_collect_emission::handler(ctx, emission_index)
-    }
-
     #[instruction(discriminator = [17])]
     pub fn trade_pt<'info>(
         ctx: Context<'_, '_, '_, 'info, TradePt<'info>>,
@@ -227,15 +200,6 @@ pub mod clearstone_core {
         yt_out: u64,
     ) -> Result<BuyYtEvent> {
         buy_yt::handler(ctx, sy_in, yt_out)
-    }
-
-    #[instruction(discriminator = [18])]
-    pub fn add_emission<'info>(
-        ctx: Context<'_, '_, '_, 'info, AddEmission<'info>>,
-        cpi_accounts: CpiAccounts,
-        treasury_fee_bps: u16,
-    ) -> Result<()> {
-        add_emission::handler(ctx, cpi_accounts, treasury_fee_bps)
     }
 
     #[instruction(discriminator = [19])]
@@ -266,40 +230,6 @@ pub mod clearstone_core {
         collect_treasury_interest::handler(ctx, amount, kind)
     }
 
-    #[instruction(discriminator = [22])]
-    pub fn add_farm<'i>(
-        ctx: Context<'_, '_, '_, 'i, AddFarm>,
-        token_rate: u64,
-        until_timestamp: u32,
-    ) -> Result<()> {
-        add_farm::handler(ctx, token_rate, until_timestamp)
-    }
-
-    #[instruction(discriminator = [23])]
-    pub fn modify_farm<'i>(
-        ctx: Context<'_, '_, '_, 'i, ModifyFarm>,
-        until_timestamp: u32,
-        new_rate: u64,
-    ) -> Result<()> {
-        modify_farm::handler(ctx, until_timestamp, new_rate)
-    }
-
-    #[instruction(discriminator = [24])]
-    pub fn claim_farm_emissions<'i>(
-        ctx: Context<'_, '_, '_, 'i, ClaimFarmEmissions>,
-        amount: Amount,
-    ) -> Result<ClaimFarmEmissionsEventV2> {
-        claim_farm_emissions::handler(ctx, amount)
-    }
-
-    #[instruction(discriminator = [25])]
-    pub fn add_market_emission<'i>(
-        ctx: Context<'_, '_, '_, 'i, AddMarketEmission>,
-        cpi_accounts: CpiAccounts,
-    ) -> Result<()> {
-        add_market_emission::handler(ctx, cpi_accounts)
-    }
-
     #[instruction(discriminator = [26])]
     pub fn modify_vault_setting(
         ctx: Context<ModifyVaultSetting>,
@@ -314,163 +244,6 @@ pub mod clearstone_core {
         action: MarketAdminAction,
     ) -> Result<()> {
         modify_market_setting::handler(ctx, action)
-    }
-
-    // Wrappers
-
-    /// Provide liquidity to a market starting with a base asset
-    /// This instruction
-    /// - deposits base asset for SY
-    /// - strips a portion of the SY into PT & YT
-    /// - provides the remaining SY with the PT into the market
-    /// - keeps the YT
-    ///
-    /// # Arguments
-    /// - `amount_base` - The amount of base asset to deposit
-    /// - `min_lp_out` - The minimum amount of LP tokens to receive
-    /// - `mint_base_accounts_until` - The index of the account to use for the base asset mint
-    #[instruction(discriminator = [28])]
-    pub fn wrapper_provide_liquidity<'info>(
-        ctx: Context<'_, '_, '_, 'info, WrapperProvideLiquidity<'info>>,
-        amount_base: u64,
-        min_lp_out: u64,
-        mint_base_accounts_until: u8,
-    ) -> Result<()> {
-        wrapper_provide_liquidity::handler(ctx, amount_base, min_lp_out, mint_base_accounts_until)
-    }
-
-    #[instruction(discriminator = [29])]
-    pub fn wrapper_buy_pt<'info>(
-        ctx: Context<'_, '_, '_, 'info, WrapperBuyPt<'info>>,
-        pt_amount: u64,
-        max_base_amount: u64,
-        mint_sy_rem_accounts_until: u8,
-    ) -> Result<()> {
-        buy_pt::handler(ctx, pt_amount, max_base_amount, mint_sy_rem_accounts_until)
-    }
-
-    #[instruction(discriminator = [30])]
-    pub fn wrapper_sell_pt<'info>(
-        ctx: Context<'_, '_, '_, 'info, WrapperSellPt<'info>>,
-        amount_pt: u64,
-        min_base_amount: u64,
-        redeem_sy_rem_accounts_until: u8,
-    ) -> Result<()> {
-        sell_pt::handler(
-            ctx,
-            amount_pt,
-            min_base_amount,
-            redeem_sy_rem_accounts_until,
-        )
-    }
-
-    #[instruction(discriminator = [31])]
-    pub fn wrapper_buy_yt<'info>(
-        ctx: Context<'_, '_, '_, 'info, WrapperBuyYt<'info>>,
-        // exact amount of YT the trader wants to buy
-        yt_out: u64,
-        // max base amount the trader is willing to spend
-        max_base_amount: u64,
-        // The number of accounts to be used for minting SY
-        mint_sy_accounts_length: u8,
-    ) -> Result<()> {
-        wrapper_buy_yt::handler(ctx, yt_out, max_base_amount, mint_sy_accounts_length)
-    }
-
-    #[instruction(discriminator = [32])]
-    pub fn wrapper_sell_yt<'info>(
-        ctx: Context<'_, '_, '_, 'info, WrapperSellYt<'info>>,
-        yt_amount: u64,
-        min_base_amount: u64,
-        redeem_sy_accounts_until: u8,
-    ) -> Result<()> {
-        wrapper_sell_yt::handler(ctx, yt_amount, min_base_amount, redeem_sy_accounts_until)
-    }
-
-    #[instruction(discriminator = [33])]
-    pub fn wrapper_collect_interest<'info>(
-        ctx: Context<'_, '_, '_, 'info, WrapperCollectInterest<'info>>,
-        redeem_sy_accounts_length: u8,
-    ) -> Result<()> {
-        wrapper_collect_interest::handler(ctx, redeem_sy_accounts_length)
-    }
-
-    #[instruction(discriminator = [34])]
-    pub fn wrapper_withdraw_liquidity<'info>(
-        ctx: Context<'_, '_, '_, 'info, WrapperWithdrawLiquidity<'info>>,
-        amount_lp: u64,
-        sy_constraint: u64,
-        redeem_sy_accounts_length: u8,
-    ) -> Result<()> {
-        wrapper_withdraw_liquidity::handler(
-            ctx,
-            amount_lp,
-            sy_constraint,
-            redeem_sy_accounts_length,
-        )
-    }
-
-    #[instruction(discriminator = [35])]
-    pub fn wrapper_withdraw_liquidity_classic<'info>(
-        ctx: Context<'_, '_, '_, 'info, WrapperWithdrawLiquidityClassic<'info>>,
-        amount_lp: u64,
-        redeem_sy_accounts_length: u8,
-    ) -> Result<()> {
-        wrapper_withdraw_liquidity_classic::handler(ctx, amount_lp, redeem_sy_accounts_length)
-    }
-
-    #[instruction(discriminator = [36])]
-    pub fn wrapper_provide_liquidity_base<'info>(
-        ctx: Context<'_, '_, '_, 'info, WrapperProvideLiquidityBase<'info>>,
-        amount_base: u64,
-        min_lp_out: u64,
-        mint_sy_accounts_until: u8,
-        external_pt_to_buy: u64,
-        external_sy_constraint: u64,
-    ) -> Result<()> {
-        wrapper_provide_liquidity_base::handler(
-            ctx,
-            amount_base,
-            min_lp_out,
-            mint_sy_accounts_until,
-            external_pt_to_buy,
-            external_sy_constraint,
-        )
-    }
-
-    #[instruction(discriminator = [37])]
-    pub fn wrapper_provide_liquidity_classic<'info>(
-        ctx: Context<'_, '_, '_, 'info, WrapperProvideLiquidityClassic<'info>>,
-        amount_base: u64,
-        amount_pt: u64,
-        min_lp_out: u64,
-        mint_sy_accounts_until: u8,
-    ) -> Result<()> {
-        wrapper_provide_liquidity_classic::handler(
-            ctx,
-            amount_base,
-            amount_pt,
-            min_lp_out,
-            mint_sy_accounts_until,
-        )
-    }
-
-    #[instruction(discriminator = [38])]
-    pub fn wrapper_strip<'info>(
-        ctx: Context<'_, '_, '_, 'info, WrapperStrip<'info>>,
-        amount_base: u64,
-        mint_sy_accounts_until: u8,
-    ) -> Result<()> {
-        wrapper_strip::handler(ctx, amount_base, mint_sy_accounts_until)
-    }
-
-    #[instruction(discriminator = [39])]
-    pub fn wrapper_merge<'info>(
-        ctx: Context<'_, '_, '_, 'info, WrapperMerge<'info>>,
-        amount_py: u64,
-        redeem_sy_accounts_until: u8,
-    ) -> Result<()> {
-        wrapper_merge::handler(ctx, amount_py, redeem_sy_accounts_until)
     }
 
     #[instruction(discriminator = [40])]
@@ -490,5 +263,4 @@ pub mod clearstone_core {
     ) -> Result<()> {
         add_lp_tokens_metadata::handler(ctx, name, symbol, uri)
     }
-
 }
