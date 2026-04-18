@@ -1,6 +1,6 @@
 use crate::{
-    error::ExponentCoreError, instructions::vault::common::yield_position_earn, state::*,
-    util::token_transfer, utils::do_withdraw_sy,
+    error::ExponentCoreError, instructions::vault::common::yield_position_earn, reentrancy,
+    state::*, util::token_transfer, utils::{do_withdraw_sy, sy_cpi::validate_sy_state},
 };
 use amount_value::Amount;
 use anchor_lang::prelude::*;
@@ -97,6 +97,8 @@ pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, CollectInterest<'info>>,
     amount: Amount,
 ) -> Result<CollectInterestEventV2> {
+    reentrancy::enter(&mut *ctx.accounts.vault)?;
+
     let amount_sy = amount.to_u64(ctx.accounts.yield_position.interest.staged)?;
 
     ctx.accounts
@@ -114,7 +116,9 @@ pub fn handler<'info>(
     // collect_interest to synchronize vault emission indexes with the current state.
     yield_position_earn(&mut ctx.accounts.vault, &mut ctx.accounts.yield_position);
 
-    do_withdraw_sy(
+    reentrancy::persist(&ctx.accounts.vault)?;
+
+    let sy_state = do_withdraw_sy(
         amount_sy,
         &ctx.accounts.address_lookup_table,
         &ctx.accounts.vault.cpi_accounts,
@@ -123,6 +127,8 @@ pub fn handler<'info>(
         ctx.accounts.sy_program.key(),
         &[&ctx.accounts.vault.signer_seeds()],
     )?;
+    ctx.accounts.vault.reload()?;
+    validate_sy_state(&sy_state, ctx.accounts.vault.emissions.len())?;
 
     let (user_sy, fee_sy) = handle_collect_interest(
         &mut ctx.accounts.vault,
@@ -150,6 +156,8 @@ pub fn handler<'info>(
     };
 
     emit_cpi!(event);
+
+    reentrancy::leave(&mut *ctx.accounts.vault);
 
     Ok(event)
 }

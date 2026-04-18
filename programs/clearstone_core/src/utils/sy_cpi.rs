@@ -1,5 +1,6 @@
 use crate::{
     cpi_common::{to_account_metas, CpiAccounts, CpiInterfaceContext},
+    error::ExponentCoreError,
     util::deserialize_lookup_table,
 };
 use amount_value::Amount;
@@ -13,6 +14,25 @@ use anchor_lang::{
 use precise_number::Number;
 use std::{collections::HashSet, vec};
 use sy_common::{MintSyReturnData, PositionState, RedeemSyReturnData, SyState};
+
+/// Validate a freshly-returned SyState. The SY program is untrusted, so every
+/// return value that the vault/market will act on must be sanitized.
+///
+/// - `exchange_rate > 0` — zero would divide-by-zero downstream.
+/// - `emission_indexes.len() == expected_emissions` — mismatched length would
+///   mean a vault-level emission row has no counterpart in the SY return,
+///   corrupting any subsequent index update. See I-C3 in PLAN.md §3.
+pub fn validate_sy_state(sy_state: &SyState, expected_emissions: usize) -> Result<()> {
+    require!(
+        sy_state.exchange_rate > Number::ZERO,
+        ExponentCoreError::SyInvalidExchangeRate
+    );
+    require!(
+        sy_state.emission_indexes.len() == expected_emissions,
+        ExponentCoreError::SyEmissionIndexesMismatch
+    );
+    Ok(())
+}
 
 /// Filter rem_accounts to only include those that are in the CpiInterfaceContexts
 pub fn filter_rem_accounts<'i>(

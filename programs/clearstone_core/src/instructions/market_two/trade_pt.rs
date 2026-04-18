@@ -1,9 +1,10 @@
 use crate::{
     cpi_common::CpiAccounts,
     error::ExponentCoreError,
+    reentrancy,
     state::MarketTwo,
     util::token_transfer,
-    utils::{do_deposit_sy, do_get_sy_state, do_withdraw_sy},
+    utils::{do_deposit_sy, do_get_sy_state, do_withdraw_sy, sy_cpi::validate_sy_state},
     STATUS_CAN_BUY_PT, STATUS_CAN_SELL_PT,
 };
 use anchor_lang::prelude::*;
@@ -166,15 +167,22 @@ pub fn handler<'info>(
     net_trader_pt: i64,
     sy_constraint: i64,
 ) -> Result<TradePtEvent> {
+    reentrancy::enter(&mut *ctx.accounts.market)?;
+
     let now = Clock::get()?.unix_timestamp as u64;
     assert!(ctx.accounts.market.is_active(now), "market is expired");
 
-    let sy_exchange_rate = get_sy_exchange_rate(
-        &ctx.accounts.address_lookup_table,
+    reentrancy::persist(&ctx.accounts.market)?;
+
+    let sy_state = do_get_sy_state(
+        &ctx.accounts.address_lookup_table.to_account_info(),
         &ctx.accounts.market.cpi_accounts,
         ctx.remaining_accounts,
         ctx.accounts.sy_program.key(),
     )?;
+    ctx.accounts.market.reload()?;
+    validate_sy_state(&sy_state, ctx.accounts.market.emissions.trackers.len())?;
+    let sy_exchange_rate = sy_state.exchange_rate;
 
     let is_current_flash_swap = ctx.accounts.market.is_current_flash_swap;
 
@@ -214,6 +222,9 @@ pub fn handler<'info>(
     ctx.accounts
         .do_transfer_pt(trade_result.net_trader_pt.abs() as u64, is_buy_pt)?;
 
+    // Persist in-memory state changes before the next untrusted SY CPI.
+    reentrancy::persist(&ctx.accounts.market)?;
+
     // Transfer SY between trader & market & sy program
     transfer_sy(
         is_buy_pt,
@@ -228,6 +239,7 @@ pub fn handler<'info>(
         ctx.accounts.transfer_sy_fee_context(is_buy_pt),
         trade_result.treasury_fee_amount,
     )?;
+    ctx.accounts.market.reload()?;
 
     let event = TradePtEvent {
         trader: ctx.accounts.trader.key(),
@@ -244,6 +256,8 @@ pub fn handler<'info>(
     };
 
     emit_cpi!(event);
+
+    reentrancy::leave(&mut *ctx.accounts.market);
 
     Ok(event)
 }
@@ -316,13 +330,3 @@ fn transfer_sy<'info>(
     Ok(())
 }
 
-fn get_sy_exchange_rate(
-    alt: &AccountInfo,
-    cpi_accounts: &CpiAccounts,
-    rem_accounts: &[AccountInfo],
-    sy_program: Pubkey,
-) -> Result<Number> {
-    let sy_state = do_get_sy_state(alt, cpi_accounts, rem_accounts, sy_program)?;
-
-    Ok(sy_state.exchange_rate)
-}

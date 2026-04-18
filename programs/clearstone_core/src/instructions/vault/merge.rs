@@ -1,9 +1,10 @@
 use super::common::update_vault_yield;
 use crate::{
     error::ExponentCoreError,
+    reentrancy,
     state::*,
     util::{now, token_transfer},
-    utils::{do_get_sy_state, do_withdraw_sy},
+    utils::{do_get_sy_state, do_withdraw_sy, sy_cpi::validate_sy_state},
 };
 use anchor_lang::prelude::*;
 use anchor_spl::{token::Token, token_2022::Burn, token_interface::*};
@@ -150,7 +151,13 @@ pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, Merge<'info>>,
     amount_py: u64,
 ) -> Result<MergeEvent> {
+    // Reentrancy: latch before any untrusted SY CPI.
+    reentrancy::enter(&mut **ctx.accounts.vault)?;
+
     let current_unix_timestamp = now();
+
+    // Flush latch to disk before the first untrusted CPI.
+    reentrancy::persist(&ctx.accounts.vault)?;
 
     // get the latest exchange rate for SY using the CPI interface & return data
     let sy_state = do_get_sy_state(
@@ -159,6 +166,8 @@ pub fn handler<'info>(
         ctx.remaining_accounts,
         ctx.accounts.sy_program.key(),
     )?;
+    ctx.accounts.vault.reload()?;
+    validate_sy_state(&sy_state, ctx.accounts.vault.emissions.len())?;
 
     let amount_sy = handle_merge(
         &mut ctx.accounts.vault,
@@ -168,7 +177,10 @@ pub fn handler<'info>(
         amount_py,
     )?;
 
-    do_withdraw_sy(
+    // Persist state updates before the second CPI.
+    reentrancy::persist(&ctx.accounts.vault)?;
+
+    let sy_state_withdraw = do_withdraw_sy(
         amount_sy,
         &ctx.accounts.address_lookup_table,
         &ctx.accounts.vault.cpi_accounts,
@@ -178,6 +190,8 @@ pub fn handler<'info>(
         &[&ctx.accounts.vault.signer_seeds()],
     )
     .expect("failed to withdraw sy from CPI");
+    ctx.accounts.vault.reload()?;
+    validate_sy_state(&sy_state_withdraw, ctx.accounts.vault.emissions.len())?;
 
     // Transfer SY to the owner
     ctx.accounts.transfer_sy(amount_sy)?;
@@ -208,6 +222,8 @@ pub fn handler<'info>(
     };
 
     emit_cpi!(event);
+
+    reentrancy::leave(&mut **ctx.accounts.vault);
 
     Ok(event)
 }

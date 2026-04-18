@@ -1,14 +1,17 @@
 use anchor_lang::prelude::*;
 
-use crate::{cpi_common::CpiAccounts, LiquidityNetBalanceLimits, MarketTwo};
+use crate::{cpi_common::CpiAccounts, error::ExponentCoreError, LiquidityNetBalanceLimits, MarketTwo};
 
+/// Curator-gated actions on a live market. Same rules as AdminAction: only
+/// pauses, ratchet-downs, and bookkeeping. The core curve parameters
+/// (`ln_fee_rate_root`, `rate_scalar_root`) and `max_lp_supply` are frozen at
+/// init and cannot be changed — a curator who wants a different curve must
+/// spin up a new market.
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub enum MarketAdminAction {
     SetStatus(u8),
-    SetMaxLpSupply(u64),
-    ChangeTreasuryTradeSyBpsFee(u16),
-    ChangeLnFeeRateRoot(f64),
-    ChangeRateScalarRoot(f64),
+    /// Lower `fee_treasury_sy_bps`. Must be <= current value.
+    LowerTreasuryTradeSyBpsFee(u16),
     ChangeCpiAccounts {
         cpi_accounts: CpiAccounts,
     },
@@ -42,22 +45,12 @@ pub fn handler(ctx: Context<ModifyMarketSetting>, action: MarketAdminAction) -> 
         MarketAdminAction::SetStatus(new_status) => {
             market.status_flags = new_status;
         }
-        MarketAdminAction::SetMaxLpSupply(max_supply) => {
-            market.max_lp_supply = max_supply;
-        }
-        MarketAdminAction::ChangeTreasuryTradeSyBpsFee(new_treasury_trade_sy_bps_fee) => {
-            assert!(
-                new_treasury_trade_sy_bps_fee <= 10000,
-                "Treasury trade SY BPS fee must be less than or equal to 10000"
+        MarketAdminAction::LowerTreasuryTradeSyBpsFee(new_fee) => {
+            require!(
+                new_fee <= market.fee_treasury_sy_bps,
+                ExponentCoreError::FeeNotRatchetDown
             );
-
-            market.fee_treasury_sy_bps = new_treasury_trade_sy_bps_fee;
-        }
-        MarketAdminAction::ChangeLnFeeRateRoot(new_ln_fee_rate_root) => {
-            market.financials.ln_fee_rate_root = new_ln_fee_rate_root;
-        }
-        MarketAdminAction::ChangeRateScalarRoot(new_rate_scalar_root) => {
-            market.financials.rate_scalar_root = new_rate_scalar_root;
+            market.fee_treasury_sy_bps = new_fee;
         }
         MarketAdminAction::ChangeCpiAccounts { cpi_accounts } => {
             let old_size = market.to_account_info().data_len();

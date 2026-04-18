@@ -1,9 +1,10 @@
 use super::common::update_vault_yield;
 use crate::{
     error::ExponentCoreError,
+    reentrancy,
     state::*,
     util::{now, token_transfer},
-    utils::*,
+    utils::{sy_cpi::validate_sy_state, *},
 };
 use anchor_lang::prelude::*;
 use anchor_spl::{token::Token, token_interface::*};
@@ -152,10 +153,16 @@ pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, Strip<'info>>,
     amount: u64,
 ) -> Result<StripEvent> {
+    // Reentrancy: latch the vault before touching the untrusted SY program.
+    reentrancy::enter(&mut **ctx.accounts.vault)?;
+
     // First, transfer SY tokens to account owned by vault
     token_transfer(ctx.accounts.transfer_sy_context(), amount)?;
 
-    // Then transfer SY tokens into sy_program
+    // Flush guard=true to the account data so a re-entrant CPI sees it.
+    reentrancy::persist(&ctx.accounts.vault)?;
+
+    // Then transfer SY tokens into sy_program (untrusted CPI).
     let sy_state = do_deposit_sy(
         amount,
         &ctx.accounts.address_lookup_table,
@@ -165,6 +172,12 @@ pub fn handler<'info>(
         ctx.accounts.sy_program.key(),
         &[&ctx.accounts.vault.signer_seeds()],
     )?;
+
+    // Re-read vault state after the untrusted CPI.
+    ctx.accounts.vault.reload()?;
+
+    // Sanitize the SY program's return.
+    validate_sy_state(&sy_state, ctx.accounts.vault.emissions.len())?;
 
     // Main logic mutating state
     let current_unix_timestamp = now();
@@ -202,6 +215,10 @@ pub fn handler<'info>(
     };
 
     emit_cpi!(event);
+
+    // Release the reentrancy latch. Anchor's end-of-ix serialization flushes
+    // the cleared value back to the account.
+    reentrancy::leave(&mut **ctx.accounts.vault);
 
     Ok(event)
 }

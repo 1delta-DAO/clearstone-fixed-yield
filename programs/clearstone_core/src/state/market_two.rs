@@ -4,7 +4,7 @@ use exponent_time_curve::math::{exchange_rate_from_ln_implied_rate, fee_rate};
 use precise_number::Number;
 use sy_common::PositionState;
 
-use crate::{cpi_common::CpiAccounts, error::ExponentCoreError};
+use crate::{cpi_common::CpiAccounts, error::ExponentCoreError, reentrancy::Reentrant};
 
 /// Minimum size of market operations
 /// Used to protect against rounding errors
@@ -29,6 +29,13 @@ pub struct MarketTwo {
     /// Curator authorized to modify this market's mutable settings.
     /// Set at init; replaces the global admin-principle whitelist.
     pub curator: Pubkey,
+
+    /// Ceiling committed at init for this market's treasury SY fee.
+    /// Bounded by PROTOCOL_FEE_MAX_BPS at creation, immutable after.
+    pub creator_fee_bps: u16,
+
+    /// Non-reentrancy latch. Same semantics as Vault.reentrancy_guard.
+    pub reentrancy_guard: bool,
 
     /// Address to ALT
     pub address_lookup_table: Pubkey,
@@ -159,6 +166,12 @@ impl MarketTwo {
         // curator
         32 +
 
+        // creator_fee_bps
+        2 +
+
+        // reentrancy_guard
+        1 +
+
         // address_lookup_table
         32 +
 
@@ -256,6 +269,7 @@ impl MarketTwo {
         treasury_fee_bps: u16,
         seed_id: u8,
         curator: Pubkey,
+        creator_fee_bps: u16,
     ) -> Self {
         // Calculate quantity of asset represented by SY tokens
         let asset = Number::from(sy_init) * sy_exchange_rate;
@@ -295,6 +309,8 @@ impl MarketTwo {
         assert!(seed_id != 0, "New seed id cannot be zero");
         Self {
             curator,
+            creator_fee_bps,
+            reentrancy_guard: false,
             self_address,
             signer_bump,
             mint_pt,
@@ -354,6 +370,15 @@ impl MarketTwo {
             expiry_timestamp: expiry_ts,
             index: Number::ZERO,
         })
+    }
+}
+
+impl Reentrant for MarketTwo {
+    fn reentrancy_guard(&self) -> bool {
+        self.reentrancy_guard
+    }
+    fn set_reentrancy_guard(&mut self, v: bool) {
+        self.reentrancy_guard = v;
     }
 }
 

@@ -62,4 +62,22 @@ pub enum ExponentCoreError {
     MinLpOutNotMet,
     #[msg("Unauthorized")]
     Unauthorized,
+    #[msg("Reentrancy locked")]
+    ReentrancyLocked,
+    #[msg("SY program returned an invalid exchange rate")]
+    SyInvalidExchangeRate,
+    #[msg("SY program emissions vec length does not match vault emissions")]
+    SyEmissionIndexesMismatch,
+    #[msg("Fee exceeds protocol cap")]
+    FeeExceedsProtocolCap,
+    #[msg("Fee can only be ratcheted down")]
+    FeeNotRatchetDown,
+    #[msg("Duration out of bounds")]
+    DurationOutOfBounds,
+    #[msg("Start timestamp is in the past")]
+    StartTimestampInPast,
+    #[msg("Minimum operation size must be greater than zero")]
+    MinOperationSizeZero,
+    #[msg("Action is not allowed post-init")]
+    ImmutablePostInit,
 }

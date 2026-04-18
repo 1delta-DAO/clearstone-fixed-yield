@@ -1,5 +1,7 @@
 use crate::{
+    constants::PROTOCOL_FEE_MAX_BPS,
     cpi_common::CpiAccounts,
+    error::ExponentCoreError,
     seeds::MARKET_SEED,
     utils::{cpi_init_sy_personal_account, do_deposit_sy},
     MarketTwo, Vault, ID,
@@ -264,6 +266,7 @@ pub fn make_market(
     fee_treasury_sy_bps: u16,
     seed_id: u8,
     curator: Pubkey,
+    creator_fee_bps: u16,
 ) -> MarketTwo {
     let expiration_ts = (ctx.accounts.vault.start_ts + ctx.accounts.vault.duration) as u64;
     let mint_pt = ctx.accounts.mint_pt.key();
@@ -299,6 +302,7 @@ pub fn make_market(
         fee_treasury_sy_bps,
         seed_id,
         curator,
+        creator_fee_bps,
     )
 }
 
@@ -333,7 +337,20 @@ pub fn handler<'info>(
 
     // curator for this market (all modify_* ixns gate on this key)
     curator: Pubkey,
+
+    // immutable ceiling for fee_treasury_sy_bps (I-E1 / I-E2)
+    creator_fee_bps: u16,
 ) -> Result<()> {
+    // PLAN §6.2 init validations
+    require!(
+        creator_fee_bps <= PROTOCOL_FEE_MAX_BPS,
+        ExponentCoreError::FeeExceedsProtocolCap
+    );
+    require!(
+        fee_treasury_sy_bps <= creator_fee_bps,
+        ExponentCoreError::FeeExceedsProtocolCap
+    );
+
     // make the market account from a factory
     let market = make_market(
         &ctx,
@@ -348,6 +365,7 @@ pub fn handler<'info>(
         fee_treasury_sy_bps,
         seed_id,
         curator,
+        creator_fee_bps,
     );
     ctx.accounts.market.set_inner(market);
 

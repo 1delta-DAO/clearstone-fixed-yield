@@ -1,4 +1,6 @@
 use crate::{
+    constants::{MAX_DURATION_SECONDS, MIN_DURATION_SECONDS, PROTOCOL_FEE_MAX_BPS},
+    error::ExponentCoreError,
     seeds::{AUTHORITY_SEED, ESCROW_YT_SEED, MINT_PT_SEED, MINT_YT_SEED, YIELD_POSITION_SEED},
     state::cpi_common::CpiAccounts,
 };
@@ -144,11 +146,15 @@ impl InitializeVault<'_> {
         min_op_size_strip: u64,
         min_op_size_merge: u64,
         curator: Pubkey,
+        creator_fee_bps: u16,
+        max_py_supply: u64,
     ) {
         let address = self.vault.key();
         let vault = &mut self.vault;
 
         vault.curator = curator;
+        vault.creator_fee_bps = creator_fee_bps;
+        vault.reentrancy_guard = false;
 
         msg!("sy program is {:?}", self.sy_program.key());
         vault.sy_program = self.sy_program.key();
@@ -193,7 +199,7 @@ impl InitializeVault<'_> {
             claim_window_duration_seconds: duration,
         };
 
-        vault.max_py_supply = u64::MAX;
+        vault.max_py_supply = max_py_supply;
     }
 
     fn set_yield_position(&mut self) {
@@ -250,7 +256,31 @@ pub fn handler(
     pt_metadata_symbol: String,
     pt_metadata_uri: String,
     curator: Pubkey,
+    creator_fee_bps: u16,
+    max_py_supply: u64,
 ) -> Result<()> {
+    // PLAN §6.2 init validations — these are the immutable safety rails.
+    require!(
+        creator_fee_bps <= PROTOCOL_FEE_MAX_BPS,
+        ExponentCoreError::FeeExceedsProtocolCap
+    );
+    require!(
+        interest_bps_fee <= creator_fee_bps,
+        ExponentCoreError::FeeExceedsProtocolCap
+    );
+    require!(
+        duration >= MIN_DURATION_SECONDS && duration <= MAX_DURATION_SECONDS,
+        ExponentCoreError::DurationOutOfBounds
+    );
+    require!(
+        (start_timestamp as i64) >= Clock::get()?.unix_timestamp,
+        ExponentCoreError::StartTimestampInPast
+    );
+    require!(
+        min_op_size_strip > 0 && min_op_size_merge > 0,
+        ExponentCoreError::MinOperationSizeZero
+    );
+
     ctx.accounts.set_vault(
         start_timestamp,
         duration,
@@ -261,6 +291,8 @@ pub fn handler(
         min_op_size_strip,
         min_op_size_merge,
         curator,
+        creator_fee_bps,
+        max_py_supply,
     );
 
     ctx.accounts.set_yield_position();

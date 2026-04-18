@@ -1,6 +1,8 @@
 use anchor_lang::prelude::*;
+pub mod constants;
 pub mod error;
 mod instructions;
+pub mod reentrancy;
 pub mod seeds;
 pub mod state;
 pub mod utils;
@@ -35,6 +37,8 @@ pub mod clearstone_core {
 
     /// Permissionless vault init. Creator supplies the curator pubkey —
     /// that pubkey controls all future modify_* instructions for this vault.
+    /// `creator_fee_bps` is the permanent upper bound on `interest_bps_fee`
+    /// (capped by `PROTOCOL_FEE_MAX_BPS` — see I-E1 / I-E2).
     #[instruction(discriminator = [2])]
     pub fn initialize_vault(
         ctx: Context<InitializeVault>,
@@ -48,6 +52,8 @@ pub mod clearstone_core {
         pt_metadata_symbol: String,
         pt_metadata_uri: String,
         curator: Pubkey,
+        creator_fee_bps: u16,
+        max_py_supply: u64,
     ) -> Result<()> {
         initialize_vault::handler(
             ctx,
@@ -61,6 +67,8 @@ pub mod clearstone_core {
             pt_metadata_symbol,
             pt_metadata_uri,
             curator,
+            creator_fee_bps,
+            max_py_supply,
         )
     }
 
@@ -127,6 +135,7 @@ pub mod clearstone_core {
         cpi_accounts: CpiAccounts,
         seed_id: u8,
         curator: Pubkey,
+        creator_fee_bps: u16,
     ) -> Result<()> {
         market_two_init::handler(
             ctx,
@@ -140,6 +149,7 @@ pub mod clearstone_core {
             cpi_accounts,
             seed_id,
             curator,
+            creator_fee_bps,
         )
     }
 

@@ -1,5 +1,6 @@
 use crate::{
-    error::ExponentCoreError, seeds::AUTHORITY_SEED, utils::math::calc_share_value, CpiAccounts,
+    error::ExponentCoreError, reentrancy::Reentrant, seeds::AUTHORITY_SEED,
+    utils::math::calc_share_value, CpiAccounts,
 };
 use anchor_lang::prelude::*;
 use precise_number::Number;
@@ -18,6 +19,16 @@ pub struct Vault {
     /// Curator authorized to modify this vault's mutable settings.
     /// Set at init; replaces the global admin-principle whitelist.
     pub curator: Pubkey,
+
+    /// Ceiling committed at init for this vault's interest fee.
+    /// Bounded by PROTOCOL_FEE_MAX_BPS at creation, immutable after.
+    /// See I-E1 / I-E2 in PLAN.md §3.
+    pub creator_fee_bps: u16,
+
+    /// Non-reentrancy latch. Set to true before any untrusted SY CPI and
+    /// cleared on the way out. User-facing entrypoints must assert it is
+    /// false on entry. See I-C1 in PLAN.md §3.
+    pub reentrancy_guard: bool,
 
     /// Link to SY program
     pub sy_program: Pubkey,
@@ -156,6 +167,12 @@ impl Vault {
 
         // curator
         32 +
+
+        // creator_fee_bps
+        2 +
+
+        // reentrancy_guard
+        1 +
 
         // sy_program
         32 +
@@ -446,6 +463,15 @@ impl Vault {
             .uncollected_sy
             .checked_sub(amount)
             .expect("underflow subtracting uncollected SY for vault");
+    }
+}
+
+impl Reentrant for Vault {
+    fn reentrancy_guard(&self) -> bool {
+        self.reentrancy_guard
+    }
+    fn set_reentrancy_guard(&mut self, v: bool) {
+        self.reentrancy_guard = v;
     }
 }
 
