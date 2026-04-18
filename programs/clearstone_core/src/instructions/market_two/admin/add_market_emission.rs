@@ -1,6 +1,5 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
-use exponent_admin::Admin;
 use precise_number::Number;
 
 use crate::{cpi_common::CpiAccounts, MarketTwo};
@@ -10,20 +9,19 @@ use crate::{cpi_common::CpiAccounts, MarketTwo};
 pub struct AddMarketEmission<'info> {
     #[account(
         mut,
+        has_one = curator,
         realloc = MarketTwo::size_of(&cpi_accounts, market.emissions.trackers.len() + 1, market.lp_farm.farm_emissions.len()),
         realloc::payer = fee_payer,
         realloc::zero = false,
     )]
     pub market: Account<'info, MarketTwo>,
 
-    pub signer: Signer<'info>,
+    pub curator: Signer<'info>,
 
     #[account(mut)]
     pub fee_payer: Signer<'info>,
 
     pub mint_new: InterfaceAccount<'info, Mint>,
-
-    pub admin_state: Account<'info, Admin>,
 
     #[account(
         mut,
@@ -39,22 +37,12 @@ pub struct AddMarketEmission<'info> {
 }
 
 impl<'i> AddMarketEmission<'i> {
-    pub fn validate(&self) -> Result<()> {
-        self.admin_state
-            .principles
-            .exponent_core
-            .is_admin(&self.signer.key())?;
-
-        Ok(())
-    }
-
     pub fn update_market(&mut self, cpi_accounts: CpiAccounts) {
         self.market.cpi_accounts = cpi_accounts;
     }
 }
 
 // TODO: make sure the positions in the sy program get realloced by making an empty deposit when adding an emission
-#[access_control(ctx.accounts.validate())]
 pub fn handler(ctx: Context<AddMarketEmission>, cpi_accounts: CpiAccounts) -> Result<()> {
     ctx.accounts.update_market(cpi_accounts);
 

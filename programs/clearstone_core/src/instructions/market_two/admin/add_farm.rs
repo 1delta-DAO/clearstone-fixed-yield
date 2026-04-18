@@ -1,7 +1,6 @@
 use anchor_lang::prelude::*;
 #[allow(deprecated)]
 use anchor_spl::token_interface::{transfer, Mint, TokenAccount, TokenInterface, Transfer};
-use exponent_admin::Admin;
 
 use crate::{error::ExponentCoreError, MarketTwo};
 
@@ -9,20 +8,19 @@ use crate::{error::ExponentCoreError, MarketTwo};
 pub struct AddFarm<'info> {
     #[account(
         mut,
+        has_one = curator,
         realloc = MarketTwo::size_of(&market.cpi_accounts, market.emissions.trackers.len(), market.lp_farm.farm_emissions.len() + 1),
         realloc::payer = fee_payer,
         realloc::zero = false,
     )]
     pub market: Account<'info, MarketTwo>,
 
-    pub signer: Signer<'info>,
+    pub curator: Signer<'info>,
 
     #[account(mut)]
     pub fee_payer: Signer<'info>,
 
     pub mint_new: InterfaceAccount<'info, Mint>,
-
-    pub admin_state: Account<'info, Admin>,
 
     #[account(mut)]
     pub token_source: InterfaceAccount<'info, TokenAccount>,
@@ -46,11 +44,6 @@ impl<'i> AddFarm<'i> {
     }
 
     pub fn validate(&self) -> Result<()> {
-        self.admin_state
-            .principles
-            .exponent_core
-            .is_admin(&self.signer.key())?;
-
         // Check if the new farm's mint already exists
         if self
             .market
@@ -67,7 +60,7 @@ impl<'i> AddFarm<'i> {
 
     fn to_transfer_sy_in_accounts(&self) -> Transfer<'i> {
         Transfer {
-            authority: self.signer.to_account_info(),
+            authority: self.curator.to_account_info(),
             from: self.token_source.to_account_info(),
             to: self.token_farm.to_account_info(),
         }

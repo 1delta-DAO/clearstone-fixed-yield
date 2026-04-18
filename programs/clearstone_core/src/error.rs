@@ -60,4 +60,6 @@ pub enum ExponentCoreError {
     MinPtOutNotMet,
     #[msg("Min LP out not met")]
     MinLpOutNotMet,
+    #[msg("Unauthorized")]
+    Unauthorized,
 }

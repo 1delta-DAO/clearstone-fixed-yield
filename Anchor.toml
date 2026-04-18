@@ -6,8 +6,7 @@ resolution = false
 skip-lint = false
 
 [programs.localnet]
-exponent_admin = "3D6ojc8vBfDteLBDTTRznZbZRh7bkEGQaYqNkudoTCBQ"
-exponent_core = "ExponentnaRg3CQbW6dqQNZKXp7gtZ9DGMp1cwC4HAS7"
+clearstone_core = "EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC"
 
 [registry]
 url = "https://api.apr.dev"

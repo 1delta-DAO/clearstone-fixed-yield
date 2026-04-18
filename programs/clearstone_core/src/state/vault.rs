@@ -15,6 +15,10 @@ pub const STATUS_CAN_COLLECT_EMISSIONS: u8 = 0b0010_0000;
 #[derive(Default, Debug)]
 #[account]
 pub struct Vault {
+    /// Curator authorized to modify this vault's mutable settings.
+    /// Set at init; replaces the global admin-principle whitelist.
+    pub curator: Pubkey,
+
     /// Link to SY program
     pub sy_program: Pubkey,
 
@@ -149,6 +153,9 @@ impl Vault {
     pub fn size_of_static(emissions_length: usize) -> usize {
         // discriminator
         8 +
+
+        // curator
+        32 +
 
         // sy_program
         32 +

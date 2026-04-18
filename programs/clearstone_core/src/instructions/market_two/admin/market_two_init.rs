@@ -11,7 +11,6 @@ use anchor_spl::{
     token_2022::{self, MintTo, Transfer},
     token_interface::{Mint, TokenAccount},
 };
-use exponent_admin::Admin;
 use precise_number::Number;
 use token_util::{create_associated_token_account_2022, create_mint_2022, create_token_account};
 
@@ -30,8 +29,6 @@ use token_util::{create_associated_token_account_2022, create_mint_2022, create_
 pub struct MarketTwoInit<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
-
-    pub admin_signer: Signer<'info>,
 
     /// There is 1 market per vault
     #[account(
@@ -103,8 +100,6 @@ pub struct MarketTwoInit<'info> {
 
     /// CHECK: high trust instruction
     pub address_lookup_table: UncheckedAccount<'info>,
-
-    pub admin: Box<Account<'info, Admin>>,
 
     #[account(
         token::mint = mint_sy,
@@ -253,17 +248,6 @@ impl<'i> MarketTwoInit<'i> {
         )
     }
 
-    fn validate(&self) -> Result<()> {
-        self.validate_admin()?;
-        Ok(())
-    }
-
-    fn validate_admin(&self) -> Result<()> {
-        self.admin
-            .principles
-            .exponent_core
-            .is_admin(self.admin_signer.key)
-    }
 }
 
 /// Create a market struct from the raw arguments
@@ -279,6 +263,7 @@ pub fn make_market(
     cpi_accounts: &CpiAccounts,
     fee_treasury_sy_bps: u16,
     seed_id: u8,
+    curator: Pubkey,
 ) -> MarketTwo {
     let expiration_ts = (ctx.accounts.vault.start_ts + ctx.accounts.vault.duration) as u64;
     let mint_pt = ctx.accounts.mint_pt.key();
@@ -313,10 +298,10 @@ pub fn make_market(
         cpi_accounts.clone(),
         fee_treasury_sy_bps,
         seed_id,
+        curator,
     )
 }
 
-#[access_control(ctx.accounts.validate())]
 pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, MarketTwoInit<'info>>,
     // log of fee rate root
@@ -345,6 +330,9 @@ pub fn handler<'info>(
 
     // unique seed id for the market
     seed_id: u8,
+
+    // curator for this market (all modify_* ixns gate on this key)
+    curator: Pubkey,
 ) -> Result<()> {
     // make the market account from a factory
     let market = make_market(
@@ -359,6 +347,7 @@ pub fn handler<'info>(
         &cpi_accounts,
         fee_treasury_sy_bps,
         seed_id,
+        curator,
     );
     ctx.accounts.market.set_inner(market);
 

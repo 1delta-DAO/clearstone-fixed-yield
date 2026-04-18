@@ -5,7 +5,6 @@ use crate::{
 use anchor_lang::prelude::*;
 use anchor_spl::{associated_token::AssociatedToken, token::Token, token_interface::*};
 
-use exponent_admin::Admin;
 use mpl_token_metadata::{
     instructions::{CreateMetadataAccountV3Cpi, CreateMetadataAccountV3CpiAccounts},
     types::DataV2,
@@ -19,8 +18,6 @@ use crate::{state::*, utils::cpi_init_sy_personal_account};
 pub struct InitializeVault<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
-
-    pub admin: Box<Account<'info, Admin>>,
 
     /// The signer for the vault
     #[account(
@@ -146,9 +143,12 @@ impl InitializeVault<'_> {
         interest_bps_fee: u16,
         min_op_size_strip: u64,
         min_op_size_merge: u64,
+        curator: Pubkey,
     ) {
         let address = self.vault.key();
         let vault = &mut self.vault;
+
+        vault.curator = curator;
 
         msg!("sy program is {:?}", self.sy_program.key());
         vault.sy_program = self.sy_program.key();
@@ -201,15 +201,6 @@ impl InitializeVault<'_> {
         self.yield_position.vault = self.vault.key();
     }
 
-    fn validate(&self) -> Result<()> {
-        self.admin
-            .principles
-            .exponent_core
-            .is_admin(self.payer.key)?;
-
-        Ok(())
-    }
-
     /// Create metadata for the PT mint
     fn create_metadata(&self, name: String, symbol: String, uri: String) -> Result<()> {
         let accounts = CreateMetadataAccountV3CpiAccounts {
@@ -247,7 +238,6 @@ impl InitializeVault<'_> {
     }
 }
 
-#[access_control(ctx.accounts.validate())]
 pub fn handler(
     ctx: Context<InitializeVault>,
     start_timestamp: u32,
@@ -259,6 +249,7 @@ pub fn handler(
     pt_metadata_name: String,
     pt_metadata_symbol: String,
     pt_metadata_uri: String,
+    curator: Pubkey,
 ) -> Result<()> {
     ctx.accounts.set_vault(
         start_timestamp,
@@ -269,6 +260,7 @@ pub fn handler(
         interest_bps_fee,
         min_op_size_strip,
         min_op_size_merge,
+        curator,
     );
 
     ctx.accounts.set_yield_position();

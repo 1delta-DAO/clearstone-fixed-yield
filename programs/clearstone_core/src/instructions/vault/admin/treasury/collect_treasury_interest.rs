@@ -6,7 +6,6 @@ use amount_value::Amount;
 use anchor_lang::prelude::*;
 use anchor_spl::{token::Token, token_2022::Transfer, token_interface::TokenAccount};
 use cpi_common::to_account_metas;
-use exponent_admin::Admin;
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub enum CollectTreasuryInterestKind {
@@ -14,13 +13,13 @@ pub enum CollectTreasuryInterestKind {
     TreasuryInterest,
 }
 
-/// This is a copy of the CollectInterest instruction, but for the treasury with admin checks
+/// Drain SY from the vault's treasury / yield position.
+/// Gated on `vault.curator` — replaces the original admin-principle check.
 #[derive(Accounts)]
 #[instruction(amount: Amount, kind: CollectTreasuryInterestKind)]
 pub struct CollectTreasuryInterest<'info> {
-    /// CHECK: constrained by admin
     #[account(mut)]
-    pub signer: Signer<'info>,
+    pub curator: Signer<'info>,
 
     /// CHECK: constrained by vault
     #[account(mut)]
@@ -34,6 +33,7 @@ pub struct CollectTreasuryInterest<'info> {
         has_one = address_lookup_table,
         has_one = yield_position,
         has_one = sy_program,
+        has_one = curator,
     )]
     pub vault: Account<'info, Vault>,
 
@@ -54,8 +54,6 @@ pub struct CollectTreasuryInterest<'info> {
 
     /// CHECK: constrained by vault
     pub address_lookup_table: UncheckedAccount<'info>,
-
-    pub admin: Account<'info, Admin>,
 }
 
 impl<'i> CollectTreasuryInterest<'i> {
@@ -76,18 +74,8 @@ impl<'i> CollectTreasuryInterest<'i> {
 
         token_transfer(ctx, amount)
     }
-
-    fn validate(&self) -> Result<()> {
-        self.admin
-            .principles
-            .exponent_core
-            .is_admin(self.signer.key)?;
-
-        Ok(())
-    }
 }
 
-#[access_control(ctx.accounts.validate())]
 pub fn handler(
     ctx: Context<CollectTreasuryInterest>,
     amount: Amount,
@@ -126,6 +114,5 @@ pub fn handler(
 
     ctx.accounts.vault.dec_total_sy_in_escrow(amount_to_send);
 
-    // TODO: Add event
     Ok(())
 }

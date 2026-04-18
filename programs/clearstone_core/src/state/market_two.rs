@@ -26,6 +26,10 @@ pub const ALL_FLAGS: u8 = STATUS_CAN_DEPOSIT_LIQUIDITY
 
 #[account]
 pub struct MarketTwo {
+    /// Curator authorized to modify this market's mutable settings.
+    /// Set at init; replaces the global admin-principle whitelist.
+    pub curator: Pubkey,
+
     /// Address to ALT
     pub address_lookup_table: Pubkey,
 
@@ -152,6 +156,9 @@ impl MarketTwo {
         // discriminator
         8 +
 
+        // curator
+        32 +
+
         // address_lookup_table
         32 +
 
@@ -248,6 +255,7 @@ impl MarketTwo {
         cpi_accounts: CpiAccounts,
         treasury_fee_bps: u16,
         seed_id: u8,
+        curator: Pubkey,
     ) -> Self {
         // Calculate quantity of asset represented by SY tokens
         let asset = Number::from(sy_init) * sy_exchange_rate;
@@ -286,6 +294,7 @@ impl MarketTwo {
         assert!(treasury_fee_bps < 10000, "Treasury fee BPS is too high");
         assert!(seed_id != 0, "New seed id cannot be zero");
         Self {
+            curator,
             self_address,
             signer_bump,
             mint_pt,

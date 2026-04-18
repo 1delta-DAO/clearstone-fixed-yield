@@ -1,7 +1,6 @@
 use amount_value::Amount;
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{TokenAccount, TokenInterface, Transfer};
-use exponent_admin::Admin;
 
 use crate::{
     cpi_common::to_account_metas, instructions::util::deserialize_lookup_table,
@@ -18,7 +17,7 @@ pub enum CollectTreasuryEmissionKind {
 #[instruction(index: u16, amount: Amount, kind: CollectTreasuryEmissionKind)]
 pub struct CollectTreasuryEmission<'info> {
     #[account(mut)]
-    pub signer: Signer<'info>,
+    pub curator: Signer<'info>,
 
     /// constrained by vault
     #[account(mut)]
@@ -29,7 +28,8 @@ pub struct CollectTreasuryEmission<'info> {
         has_one = authority,
         has_one = yield_position,
         has_one = address_lookup_table,
-        has_one = sy_program
+        has_one = sy_program,
+        has_one = curator,
     )]
     pub vault: Account<'info, Vault>,
 
@@ -52,8 +52,6 @@ pub struct CollectTreasuryEmission<'info> {
     pub address_lookup_table: UncheckedAccount<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
-
-    pub admin: Account<'info, Admin>,
 }
 
 impl<'i> CollectTreasuryEmission<'i> {
@@ -74,18 +72,8 @@ impl<'i> CollectTreasuryEmission<'i> {
 
         token_transfer(ctx, amount)
     }
-
-    fn validate(&self) -> Result<()> {
-        self.admin
-            .principles
-            .exponent_core
-            .is_admin(&self.signer.key)?;
-
-        Ok(())
-    }
 }
 
-#[access_control(ctx.accounts.validate())]
 pub fn handler(
     ctx: Context<CollectTreasuryEmission>,
     index: u16,

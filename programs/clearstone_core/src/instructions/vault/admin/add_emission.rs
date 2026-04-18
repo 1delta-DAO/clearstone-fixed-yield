@@ -1,13 +1,12 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::TokenAccount;
-use exponent_admin::Admin;
 
 use crate::{cpi_common::CpiAccounts, utils::do_deposit_sy, Vault, YieldTokenPosition};
 
 #[derive(Accounts)]
 #[instruction(cpi_accounts: CpiAccounts, treasury_fee_bps: u16)]
 pub struct AddEmission<'info> {
-    pub authority: Signer<'info>,
+    pub curator: Signer<'info>,
 
     #[account(mut)]
     pub fee_payer: Signer<'info>,
@@ -17,13 +16,12 @@ pub struct AddEmission<'info> {
         has_one = sy_program,
         has_one = address_lookup_table,
         has_one = yield_position,
+        has_one = curator,
         realloc = Vault::size_of_static(vault.emissions.len() + 1) + cpi_accounts.size_of(),
         realloc::payer = fee_payer,
         realloc::zero = false,
     )]
     pub vault: Box<Account<'info, Vault>>,
-
-    pub admin: Box<Account<'info, Admin>>,
 
     /// CHECK: constrained by vault
     pub sy_program: UncheckedAccount<'info>,
@@ -51,18 +49,6 @@ pub struct AddEmission<'info> {
     pub system_program: Program<'info, System>,
 }
 
-impl AddEmission<'_> {
-    fn validate(&self) -> Result<()> {
-        self.admin
-            .principles
-            .exponent_core
-            .is_admin(self.authority.key)?;
-
-        Ok(())
-    }
-}
-
-#[access_control(ctx.accounts.validate())]
 pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, AddEmission<'info>>,
     cpi_accounts: CpiAccounts,

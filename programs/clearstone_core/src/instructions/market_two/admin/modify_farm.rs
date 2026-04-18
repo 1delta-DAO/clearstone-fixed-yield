@@ -1,20 +1,20 @@
 use anchor_lang::prelude::*;
 #[allow(deprecated)]
 use anchor_spl::token_interface::{transfer, Mint, TokenAccount, TokenInterface, Transfer};
-use exponent_admin::Admin;
 
 use crate::MarketTwo;
 
 #[derive(Accounts)]
 pub struct ModifyFarm<'info> {
-    #[account(mut)]
+    #[account(
+        mut,
+        has_one = curator,
+    )]
     pub market: Account<'info, MarketTwo>,
 
-    pub signer: Signer<'info>,
+    pub curator: Signer<'info>,
 
     pub mint: InterfaceAccount<'info, Mint>,
-
-    pub admin_state: Account<'info, Admin>,
 
     #[account(mut)]
     pub token_source: InterfaceAccount<'info, TokenAccount>,
@@ -30,18 +30,9 @@ pub struct ModifyFarm<'info> {
 }
 
 impl<'i> ModifyFarm<'i> {
-    pub fn validate(&self) -> Result<()> {
-        self.admin_state
-            .principles
-            .collect_treasury
-            .is_admin(&self.signer.key())?;
-
-        Ok(())
-    }
-
     fn to_transfer_sy_in_accounts(&self) -> Transfer<'i> {
         Transfer {
-            authority: self.signer.to_account_info(),
+            authority: self.curator.to_account_info(),
             from: self.token_source.to_account_info(),
             to: self.token_farm.to_account_info(),
         }
@@ -70,7 +61,6 @@ impl<'i> ModifyFarm<'i> {
     }
 }
 
-#[access_control(ctx.accounts.validate())]
 pub fn handler(
     ctx: Context<ModifyFarm>,
     new_expiration_timestamp: u32,

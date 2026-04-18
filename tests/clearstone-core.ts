@@ -1,12 +1,12 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { ExponentCore } from "../target/types/exponent_core";
+import { ClearstoneCore } from "../target/types/clearstone_core";
 
-describe("exponent-core", () => {
+describe("clearstone-core", () => {
   // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
 
-  const program = anchor.workspace.exponentCore as Program<ExponentCore>;
+  const program = anchor.workspace.clearstoneCore as Program<ClearstoneCore>;
 
   it("", async () => {
     return true;

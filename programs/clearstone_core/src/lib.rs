@@ -15,24 +15,26 @@ pub use state::*;
 #[cfg(all(not(feature = "idl-build"), not(test)))]
 mod allocator;
 
-declare_id!("ExponentnaRg3CQbW6dqQNZKXp7gtZ9DGMp1cwC4HAS7");
+declare_id!("EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC");
 
 #[cfg(not(feature = "no-entrypoint"))]
 security_txt! {
-    name: "Exponent Finance",
-    project_url: "https://exponent.finance",
-    contacts: "email:v@exponentlabs.xyz,email:security@exponentlabs.xyz,link:https://docs.exponent.finance/security/bug-bounty,telegram:valentinmadrid",
-    policy: "https://docs.exponent.finance/security/bug-bounty",
-    preferred_languages: "en,de,fr",
-    auditors: "Ottersec, Offside Labs"
+    name: "Clearstone Fixed Yield (Exponent Core fork)",
+    project_url: "https://github.com/1delta-DAO/clearstone-fixed-yield",
+    contacts: "email:security@1delta.io",
+    policy: "https://github.com/1delta-DAO/clearstone-fixed-yield/blob/main/SECURITY.md",
+    preferred_languages: "en",
+    auditors: "Not yet audited",
+    acknowledgements: "Derived from Exponent Core (BUSL-1.1). Upstream audits do not transfer."
 }
 
 #[program]
-pub mod exponent_core {
+pub mod clearstone_core {
 
     use super::*;
 
-    /// High-trust function to init vault
+    /// Permissionless vault init. Creator supplies the curator pubkey —
+    /// that pubkey controls all future modify_* instructions for this vault.
     #[instruction(discriminator = [2])]
     pub fn initialize_vault(
         ctx: Context<InitializeVault>,
@@ -45,6 +47,7 @@ pub mod exponent_core {
         pt_metadata_name: String,
         pt_metadata_symbol: String,
         pt_metadata_uri: String,
+        curator: Pubkey,
     ) -> Result<()> {
         initialize_vault::handler(
             ctx,
@@ -57,6 +60,7 @@ pub mod exponent_core {
             pt_metadata_name,
             pt_metadata_symbol,
             pt_metadata_uri,
+            curator,
         )
     }
 
@@ -122,6 +126,7 @@ pub mod exponent_core {
         fee_treasury_sy_bps: u16,
         cpi_accounts: CpiAccounts,
         seed_id: u8,
+        curator: Pubkey,
     ) -> Result<()> {
         market_two_init::handler(
             ctx,
@@ -134,6 +139,7 @@ pub mod exponent_core {
             fee_treasury_sy_bps,
             cpi_accounts,
             seed_id,
+            curator,
         )
     }
 
