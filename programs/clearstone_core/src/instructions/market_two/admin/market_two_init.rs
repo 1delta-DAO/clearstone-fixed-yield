@@ -399,7 +399,7 @@ pub fn handler<'info>(
 /// and the 1-wei donation attack. See PLAN §6.4.
 ///
 /// Panics on overflow; callers validate pt_init/sy_init sizes.
-fn calc_lp_tokens_out(pt_in: u64, sy_in: u64) -> u64 {
+pub(crate) fn calc_lp_tokens_out(pt_in: u64, sy_in: u64) -> u64 {
     let pt_v = (pt_in as u128).saturating_add(VIRTUAL_PT as u128);
     let sy_v = (sy_in as u128).saturating_add(VIRTUAL_SY as u128);
     let product = pt_v
@@ -407,4 +407,82 @@ fn calc_lp_tokens_out(pt_in: u64, sy_in: u64) -> u64 {
         .expect("Overflow computing virtualized LP product");
     let total_virtual_lp = (product as f64).sqrt() as u64;
     total_virtual_lp.saturating_sub(VIRTUAL_LP_FLOOR)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::calc_lp_tokens_out;
+    use crate::constants::VIRTUAL_LP_FLOOR;
+
+    /// Empty pool: no user LP minted. The `sqrt(VP*VS) - VIRTUAL_LP_FLOOR`
+    /// cancels to zero because the constants are picked so that
+    /// VIRTUAL_LP_FLOOR = sqrt(VIRTUAL_PT * VIRTUAL_SY). This is the
+    /// first-LP sandwich protection: if someone "initializes" a market
+    /// with zero liquidity and a second caller puts real liquidity in,
+    /// the first caller got zero LP and cannot extract.
+    #[test]
+    fn zero_deposit_mints_zero_lp() {
+        assert_eq!(calc_lp_tokens_out(0, 0), 0);
+    }
+
+    /// A 1-wei donation of PT or SY by itself must not mint any visible
+    /// LP above the virtual floor. `sqrt((1+VP)*VS)` is within rounding
+    /// of `sqrt(VP*VS)`.
+    #[test]
+    fn dust_deposit_mints_negligible_lp() {
+        let lp_pt_dust = calc_lp_tokens_out(1, 0);
+        let lp_sy_dust = calc_lp_tokens_out(0, 1);
+        // Integer sqrt of VIRTUAL_PT * VIRTUAL_SY = sqrt(10^12) = 10^6 = VIRTUAL_LP_FLOOR.
+        // sqrt(10^12 + 10^6) ≈ 10^6 + 0.5; floored back to 10^6 → 0 after subtraction.
+        // We allow up to 1 unit of tolerance for f64-sqrt rounding.
+        assert!(lp_pt_dust <= 1, "pt dust minted {} LP", lp_pt_dust);
+        assert!(lp_sy_dust <= 1, "sy dust minted {} LP", lp_sy_dust);
+    }
+
+    /// Blue-style formula: user_lp + VIRTUAL_LP_FLOOR is what pro-rata math
+    /// uses elsewhere. So the user's share of the pool is strictly less
+    /// than 1 — the virtual floor holds `VIRTUAL_LP_FLOOR / (user_lp +
+    /// VIRTUAL_LP_FLOOR)` of the pool forever.
+    #[test]
+    fn first_lp_share_is_strictly_less_than_one() {
+        let pt = 1_000_000_000u64;
+        let sy = 1_000_000_000u64;
+        let lp = calc_lp_tokens_out(pt, sy);
+        let virtual_total = lp + VIRTUAL_LP_FLOOR;
+        // User's share should be < 100%.
+        assert!(lp < virtual_total);
+        // For reasonably-sized pools, the dilution is tiny (< 1 part per thousand here).
+        assert!(
+            VIRTUAL_LP_FLOOR * 1000 < virtual_total,
+            "virtual floor dilution too large at this pool size"
+        );
+    }
+
+    /// Large pools converge: for reserves >> virtual constants, LP ≈ geometric mean.
+    #[test]
+    fn large_pool_approximates_geometric_mean() {
+        let pt = 10_u64.pow(15); // 10^15
+        let sy = 10_u64.pow(15);
+        let lp = calc_lp_tokens_out(pt, sy);
+        let pure_geometric_mean = ((pt as f64) * (sy as f64)).sqrt() as u64;
+        // Relative difference should be tiny: ~VIRTUAL_LP_FLOOR / 10^15.
+        let diff = pure_geometric_mean.saturating_sub(lp);
+        assert!(diff <= VIRTUAL_LP_FLOOR + 1);
+    }
+
+    /// Sandwich-attempt simulation: a first "initializer" deposits dust,
+    /// then a real liquidity provider deposits a normal amount. Dust-LP
+    /// as a fraction of the second deposit's LP must be negligible.
+    /// This is the I-M3 exit check from PLAN §3.
+    #[test]
+    fn first_lp_sandwich_attempt_is_negligible() {
+        let dust_lp = calc_lp_tokens_out(1, 1);
+        let real_lp = calc_lp_tokens_out(1_000_000_000, 1_000_000_000);
+        assert!(
+            dust_lp * 10_000 < real_lp,
+            "dust_lp={} is not < 1bp of real_lp={}",
+            dust_lp,
+            real_lp
+        );
+    }
 }

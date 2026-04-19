@@ -1315,6 +1315,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "generic_exchange_rate_sy"
+version = "0.1.0"
+dependencies = [
+ "amount_value",
+ "anchor-lang",
+ "anchor-spl",
+ "getrandom 0.2.10",
+ "precise_number",
+ "sy_common",
+]
+
+[[package]]
 name = "gethostname"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

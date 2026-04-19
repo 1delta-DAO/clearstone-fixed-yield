@@ -7,6 +7,7 @@ skip-lint = false
 
 [programs.localnet]
 clearstone_core = "EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC"
+generic_exchange_rate_sy = "DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6"
 
 [registry]
 url = "https://api.apr.dev"

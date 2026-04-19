@@ -2,6 +2,68 @@
 
 Tracked deviations from PLAN.md. Each entry: which milestone left it, why, and what it would take to close.
 
+## M6 — Integration test suite incomplete
+
+This session landed **23 Rust unit tests** covering the M3/M2 safety math
+(first-LP sandwich, donation attack, proportionality, reentrancy trait,
+SY state validation). They pass via `cargo test --package clearstone_core`.
+These are *real* tests — they run without a validator.
+
+[tests/clearstone-core.ts](tests/clearstone-core.ts) has the skeleton for
+end-to-end integration tests, organized by PLAN §7 M6 scenario, with every
+test currently marked `it.skip(...)`. The skip list **is** the TODO. Rough
+count: 17 integration cases to wire up to hit the plan's "20+" target.
+
+**Why skipped:** Full M6 needs `anchor build` + a local validator +
+test-time rent lamports. Beyond what this session can verify. Each skipped
+test has enough inline comments to pick up:
+
+1. **Permissionless happy path** (3) — SY → vault → market roundtrip,
+   strip/merge, trade_pt.
+2. **Malicious-SY isolation** (3) — zero rate rejected, emission mismatch
+   rejected, cross-vault drain blocked.
+3. **Reentrancy** (3) — requires a purpose-built `malicious_sy_reentrant`
+   mock adapter. The guard covers strip / merge / trade_pt / collect_* today
+   (see M2 carve-out below for coverage gaps).
+4. **Curator auth** (5) — non-curator rejected, ratchet-only fee, immutable
+   fields.
+5. **AMM invariants** (3) — runtime versions of the Rust math tests, plus
+   the add → withdraw round-trip.
+
+**To close M6 before audit:**
+- Write `reference_adapters/malicious_sy_reentrant/` (~200 lines, mirrors
+  generic_exchange_rate_sy but calls back into core on deposit_sy).
+- Write `tests/fixtures.ts` with reusable SY+vault+market builders.
+- Fill in the 17 skipped `it`s and get them green.
+- Finish the M2 reentrancy wiring gap (see "M2 — Reentrancy guard coverage")
+  so the reentrancy tests cover the full ix surface, not just the 5 wired ones.
+
+## M5 — Reference adapter runtime-untested
+
+[reference_adapters/generic_exchange_rate_sy](reference_adapters/generic_exchange_rate_sy/src/lib.rs)
+compiles and exposes the 10 discriminators the core's SY CPI surface needs,
+but has not been exercised at runtime. The plan's M5 exit criterion ("a
+local test creates a generic SY, creates a vault+market using it,
+strips/merges/trades successfully") lands with the M6 integration suite —
+no test runner is wired up in this repo yet.
+
+Known gaps in the adapter itself that would surface during testing:
+
+- **No ATH monotonicity**: `poke_exchange_rate` accepts any positive value.
+  A production adapter would enforce I-V3 (`all_time_high_sy_exchange_rate`
+  never decreases) or the core's vault has to absorb that risk.
+- **Account-order convention for `cpi_accounts`**: the core's
+  [CpiAccounts](programs/clearstone_core/src/state/cpi_common.rs) configures
+  which accounts get passed to each SY CPI. The vault/market creator has to
+  wire this up to match the adapter's `#[derive(Accounts)]` order. There's
+  no tooling here yet — a mismatch surfaces only at first trade.
+- **Base vault separate from pool_escrow**: `mint_sy` / `redeem_sy` use a
+  `base_vault` (base token escrow), while `deposit_sy` / `withdraw_sy` use
+  a `pool_escrow` (SY token escrow). Both are distinct token accounts on
+  the SyMarket PDA — intentional, but documentation should spell it out
+  before curators start wiring markets.
+- **No supply cap / emission accrual**: out of scope for this reference.
+
 ## M4 — Periphery programs not yet built
 
 Core is now slim: wrappers, farms, market-level emissions, LP staking, and

@@ -34,6 +34,46 @@ pub fn validate_sy_state(sy_state: &SyState, expected_emissions: usize) -> Resul
     Ok(())
 }
 
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    fn state(rate: Number, n_emissions: usize) -> SyState {
+        SyState {
+            exchange_rate: rate,
+            emission_indexes: vec![Number::ZERO; n_emissions],
+        }
+    }
+
+    #[test]
+    fn zero_exchange_rate_rejected() {
+        let s = state(Number::ZERO, 0);
+        assert!(validate_sy_state(&s, 0).is_err());
+    }
+
+    #[test]
+    fn positive_rate_with_matching_emissions_accepted() {
+        let s = state(Number::from_natural_u64(1), 3);
+        assert!(validate_sy_state(&s, 3).is_ok());
+    }
+
+    #[test]
+    fn emission_length_mismatch_rejected() {
+        // SY returns 2 emissions, vault has 3 tracked — reject.
+        let s = state(Number::from_natural_u64(1), 2);
+        assert!(validate_sy_state(&s, 3).is_err());
+        // And the reverse direction.
+        let s2 = state(Number::from_natural_u64(1), 4);
+        assert!(validate_sy_state(&s2, 3).is_err());
+    }
+
+    #[test]
+    fn empty_emissions_ok_when_none_expected() {
+        let s = state(Number::from_natural_u64(1), 0);
+        assert!(validate_sy_state(&s, 0).is_ok());
+    }
+}
+
 /// Filter rem_accounts to only include those that are in the CpiInterfaceContexts
 pub fn filter_rem_accounts<'i>(
     rem_accounts: &[AccountInfo<'i>],

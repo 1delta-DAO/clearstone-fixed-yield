@@ -50,3 +50,53 @@ where
     account.try_serialize(&mut writer)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Minimal test fixture — Reentrant is the only trait we need to exercise.
+    struct DummyLatch {
+        guard: bool,
+    }
+    impl Reentrant for DummyLatch {
+        fn reentrancy_guard(&self) -> bool {
+            self.guard
+        }
+        fn set_reentrancy_guard(&mut self, v: bool) {
+            self.guard = v;
+        }
+    }
+
+    #[test]
+    fn enter_on_clean_latch_succeeds() {
+        let mut d = DummyLatch { guard: false };
+        assert!(enter(&mut d).is_ok());
+        assert!(d.guard);
+    }
+
+    #[test]
+    fn enter_on_set_latch_fails() {
+        let mut d = DummyLatch { guard: true };
+        let r = enter(&mut d);
+        assert!(r.is_err(), "entering a latched struct must error");
+        // Guard stays latched so the caller can't accidentally recover.
+        assert!(d.guard);
+    }
+
+    #[test]
+    fn leave_clears_latch() {
+        let mut d = DummyLatch { guard: true };
+        leave(&mut d);
+        assert!(!d.guard);
+    }
+
+    #[test]
+    fn enter_leave_enter_roundtrip() {
+        let mut d = DummyLatch { guard: false };
+        enter(&mut d).unwrap();
+        leave(&mut d);
+        // Second enter must succeed after a clean leave.
+        assert!(enter(&mut d).is_ok());
+    }
+}

@@ -795,3 +795,171 @@ pub struct LiqRmResult {
     pub pt_out: u64,
     pub sy_out: u64,
 }
+
+#[cfg(test)]
+mod virtualization_tests {
+    use super::*;
+    use crate::constants::{VIRTUAL_LP_FLOOR, VIRTUAL_PT, VIRTUAL_SY};
+
+    // Build a MarketFinancials with arbitrary reserves and plausible
+    // time-curve defaults. The curve-related f64s only matter for
+    // trade_pt/current_rate_anchor, which we don't exercise here; the
+    // virtualization tests target the liquidity-math and view helpers.
+    fn fin(pt_balance: u64, sy_balance: u64) -> MarketFinancials {
+        MarketFinancials {
+            expiration_ts: 10_000_000,
+            pt_balance,
+            sy_balance,
+            ln_fee_rate_root: 0.0,
+            last_ln_implied_rate: 0.0,
+            rate_scalar_root: 1.0,
+        }
+    }
+
+    #[test]
+    fn v_balances_match_formula() {
+        let f = fin(1_000, 2_000);
+        assert_eq!(f.v_pt_balance(), 1_000 + VIRTUAL_PT);
+        assert_eq!(f.v_sy_balance(), 2_000 + VIRTUAL_SY);
+    }
+
+    #[test]
+    fn v_balances_handle_empty_pool() {
+        let f = fin(0, 0);
+        assert_eq!(f.v_pt_balance(), VIRTUAL_PT);
+        assert_eq!(f.v_sy_balance(), VIRTUAL_SY);
+    }
+
+    /// Donation attack: raw-transferring tokens into the escrow bumps
+    /// `sy_balance` but the virtual floor dominates, so the virtualized
+    /// view barely moves. I-M3 / PLAN §12 risk row "Donation attack".
+    #[test]
+    fn donation_attack_barely_shifts_virtual_view() {
+        let reserves = 1_000_000_000u64;
+        let pristine = fin(reserves, reserves);
+        // Attacker donates 1 wei of SY directly to the escrow token account.
+        let donated = fin(reserves, reserves + 1);
+
+        // Pre/post ratio of virtualized reserves — this is what any curve
+        // or LP-pricing path reads. Difference must be negligible.
+        let pristine_ratio =
+            pristine.v_pt_balance() as f64 / pristine.v_sy_balance() as f64;
+        let donated_ratio =
+            donated.v_pt_balance() as f64 / donated.v_sy_balance() as f64;
+        let rel_diff = (pristine_ratio - donated_ratio).abs() / pristine_ratio;
+        assert!(
+            rel_diff < 1e-8,
+            "1-wei donation shifted virtualized ratio by {}",
+            rel_diff
+        );
+    }
+
+    /// Bigger-donation check — even a 1000x donation is still bounded.
+    #[test]
+    fn large_donation_bounded_shift() {
+        let reserves = 1_000_000_000u64;
+        let pristine = fin(reserves, reserves);
+        let donated = fin(reserves, reserves + 1_000);
+
+        let pristine_ratio =
+            pristine.v_pt_balance() as f64 / pristine.v_sy_balance() as f64;
+        let donated_ratio =
+            donated.v_pt_balance() as f64 / donated.v_sy_balance() as f64;
+        let rel_diff = (pristine_ratio - donated_ratio).abs() / pristine_ratio;
+        // ~10^-6 — one part per million for a 1000-wei donation.
+        assert!(rel_diff < 1e-5);
+    }
+
+    /// add_liquidity on a freshly-initialized pool (zero reserves, but
+    /// a live LP supply from the init mint) must not underflow. This
+    /// would have been a panic pre-virtualization — the `lp_supply *
+    /// intent / market_total_pt` term divides by zero without the VP
+    /// cushion.
+    #[test]
+    fn add_liquidity_handles_empty_real_reserves() {
+        let mut f = fin(0, 0);
+        // Some LP supply already exists (init minted it). Add more.
+        let r = f.add_liquidity(100, 100, 500);
+        // We don't care about the exact numbers — just that it returned
+        // without panicking and consumed a finite amount of each side.
+        assert!(r.pt_in <= 100);
+        assert!(r.sy_in <= 100);
+        // Reserves moved.
+        assert_eq!(f.pt_balance, r.pt_in);
+        assert_eq!(f.sy_balance, r.sy_in);
+    }
+
+    /// For reserves >> virtual, add_liquidity at equal ratio mints
+    /// approximately proportional LP.
+    #[test]
+    fn add_liquidity_proportional_at_scale() {
+        let reserves = 1_000_000_000u64;
+        let lp_supply = reserves; // typical after init
+        let mut f = fin(reserves, reserves);
+
+        // Add 10% more liquidity at the same ratio.
+        let intent = reserves / 10;
+        let r = f.add_liquidity(intent, intent, lp_supply);
+
+        // LP minted should be ~10% of supply, within f64 noise.
+        let expected_lp = lp_supply / 10;
+        let tolerance = expected_lp / 1000; // 0.1%
+        let delta = (r.lp_out as i64 - expected_lp as i64).unsigned_abs();
+        assert!(
+            delta <= tolerance,
+            "lp_out={} expected {} tolerance {}",
+            r.lp_out,
+            expected_lp,
+            tolerance
+        );
+    }
+
+    /// rm_liquidity's clamp: on a pool where virtualized formula could
+    /// pay out more than real reserves hold, we must clamp.
+    #[test]
+    fn rm_liquidity_clamps_to_real_reserves() {
+        // Tiny real reserves; virtual floors dominate.
+        let mut f = fin(100, 100);
+        // Large lp_supply — makes the formula naively compute
+        // sy_out = lp_in * (sy+VS) / (lp_supply + VLP_FLOOR),
+        // which could exceed 100 for small lp_supply.
+        let lp_supply = 10;
+        let lp_in = 10;
+
+        let r = f.rm_liquidity(lp_in, lp_supply);
+
+        // Output is clamped to the real reserve ceiling.
+        assert!(r.pt_out <= 100);
+        assert!(r.sy_out <= 100);
+    }
+
+    /// lp_to_sy also clamps — otherwise a view function could return
+    /// a number that the pool can't actually pay out.
+    #[test]
+    fn lp_to_sy_clamps_to_real_sy() {
+        let f = fin(50, 50);
+        let sy = f.lp_to_sy(10, 10);
+        assert!(sy <= 50);
+    }
+
+    /// Virtualized add_liquidity output should match un-virtualized for
+    /// pools large enough that virtualization is noise. Sanity check that
+    /// M3 didn't break existing-pool behavior.
+    #[test]
+    fn add_liquidity_matches_classic_for_large_pools() {
+        let reserves = 10_000_000_000u64;
+        let lp_supply = reserves;
+        let mut f_v = fin(reserves, reserves);
+
+        let intent = 1_000_000u64;
+        let r = f_v.add_liquidity(intent, intent, lp_supply);
+
+        // Classic formula: lp_out = lp_supply * intent / reserves.
+        let classic = (lp_supply as u128) * (intent as u128) / (reserves as u128);
+        let delta = (r.lp_out as i128 - classic as i128).unsigned_abs();
+        // Virtual correction is on the order of VIRTUAL_LP_FLOOR * intent /
+        // reserves. Bound loosely.
+        let tolerance = (VIRTUAL_LP_FLOOR as u128 * intent as u128 / reserves as u128) + 1;
+        assert!(delta <= tolerance);
+    }
+}
