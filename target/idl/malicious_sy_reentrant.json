@@ -1,0 +1,375 @@
+{
+  "address": "FNh2bhq9exxygNfJTd2ZCmUubB5Tdk51D5od2NLKCsv8",
+  "metadata": {
+    "name": "malicious_sy_reentrant",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Test-only SY adapter that CPIs back into clearstone_core during its own deposit_sy / withdraw_sy. Used by the M6 runtime reentrancy tests to prove the vault's reentrancy_guard blocks recursive entry."
+  },
+  "instructions": [
+    {
+      "name": "claim_emission",
+      "discriminator": [
+        8
+      ],
+      "accounts": [
+        {
+          "name": "sy_market"
+        }
+      ],
+      "args": [
+        {
+          "name": "_amount",
+          "type": {
+            "defined": {
+              "name": "Amount"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "deposit_sy",
+      "docs": [
+        "If mode = MODE_REENTER_ON_DEPOSIT, re-invoke clearstone_core.strip",
+        "with the accounts the attacker wired through CpiAccounts.deposit_sy.",
+        "The second call's `do_deposit_sy` will call `latch(&vault)`, which",
+        "errors because the outer call already set the guard byte."
+      ],
+      "discriminator": [
+        5
+      ],
+      "accounts": [
+        {
+          "name": "sy_market"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ],
+      "returns": {
+        "defined": {
+          "name": "SyState"
+        }
+      }
+    },
+    {
+      "name": "get_position",
+      "discriminator": [
+        10
+      ],
+      "accounts": [
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "position"
+        }
+      ],
+      "args": [],
+      "returns": {
+        "defined": {
+          "name": "PositionState"
+        }
+      }
+    },
+    {
+      "name": "get_sy_state",
+      "discriminator": [
+        7
+      ],
+      "accounts": [
+        {
+          "name": "sy_market"
+        }
+      ],
+      "args": [],
+      "returns": {
+        "defined": {
+          "name": "SyState"
+        }
+      }
+    },
+    {
+      "name": "init_personal_account",
+      "discriminator": [
+        3
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "owner"
+        },
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "position",
+          "writable": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initialize",
+      "discriminator": [
+        0
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "seed_key"
+        },
+        {
+          "name": "sy_market",
+          "writable": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "mode",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "set_mode",
+      "discriminator": [
+        100
+      ],
+      "accounts": [
+        {
+          "name": "sy_market",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "mode",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "withdraw_sy",
+      "docs": [
+        "If mode = MODE_REENTER_ON_WITHDRAW, re-invoke clearstone_core.merge."
+      ],
+      "discriminator": [
+        6
+      ],
+      "accounts": [
+        {
+          "name": "sy_market"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ],
+      "returns": {
+        "defined": {
+          "name": "SyState"
+        }
+      }
+    }
+  ],
+  "accounts": [
+    {
+      "name": "PersonalPosition",
+      "discriminator": [
+        40,
+        172,
+        123,
+        89,
+        170,
+        15,
+        56,
+        141
+      ]
+    },
+    {
+      "name": "SyMarket",
+      "discriminator": [
+        180,
+        101,
+        13,
+        82,
+        190,
+        193,
+        213,
+        148
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "NotEnoughAccounts",
+      "msg": "remaining_accounts must contain [target_program, ...target_accounts]"
+    }
+  ],
+  "types": [
+    {
+      "name": "Amount",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "All"
+          },
+          {
+            "name": "Some",
+            "fields": [
+              "u64"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "Emission",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_claimable",
+            "type": "u64"
+          },
+          {
+            "name": "last_seen_emission_index",
+            "type": {
+              "defined": {
+                "name": "Number"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Number",
+      "docs": [
+        "High precision number, stored as 4 u64 words in little endian"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "array": [
+              "u64",
+              4
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "PersonalPosition",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "sy_market",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PositionState",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "sy_balance",
+            "type": "u64"
+          },
+          {
+            "name": "emissions",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "Emission"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "SyMarket",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "seed_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "mode",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SyState",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "exchange_rate",
+            "type": {
+              "defined": {
+                "name": "Number"
+              }
+            }
+          },
+          {
+            "name": "emission_indexes",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "Number"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

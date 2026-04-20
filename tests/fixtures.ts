@@ -33,6 +33,7 @@ import {
 import type { GenericExchangeRateSy } from "../target/types/generic_exchange_rate_sy";
 import type { ClearstoneCore } from "../target/types/clearstone_core";
 import type { MaliciousSyNonsense } from "../target/types/malicious_sy_nonsense";
+import type { MaliciousSyReentrant } from "../target/types/malicious_sy_reentrant";
 
 // ===== Seed constants =====
 
@@ -1309,6 +1310,341 @@ export async function tradePt(args: TradePtArgs): Promise<string> {
     .remainingAccounts(adapterExtraAccountsForMarket(sy, market.marketPosition))
     .signers([trader])
     .rpc();
+}
+
+// ===== Reentrant-mock setup (for runtime reentrancy-guard tests) =====
+//
+// The malicious_sy_reentrant adapter re-invokes clearstone_core during
+// its own deposit_sy / withdraw_sy. To let it do that, the vault
+// creator wires CpiAccounts.deposit_sy / CpiAccounts.withdraw_sy to
+// expose *every* account the inner core ix needs — including the core
+// program itself and the depositor's signer AccountInfo.
+//
+// Modes (match MODE_* constants in the adapter):
+//   0 = benign (behaves honestly)
+//   1 = re-invoke core.strip during deposit_sy
+//   2 = re-invoke core.merge  during withdraw_sy
+
+export const REENTRANT_MODE_BENIGN = 0;
+export const REENTRANT_MODE_REENTER_ON_DEPOSIT = 1;
+export const REENTRANT_MODE_REENTER_ON_WITHDRAW = 2;
+
+export interface ReentrantHandles {
+  syMarket: PublicKey;
+  syMint: PublicKey; // sham mint — adapter doesn't manage SY transfers.
+  programId: PublicKey;
+  seedKey: PublicKey;
+}
+
+export async function createReentrantMarket(params: {
+  program: Program<MaliciousSyReentrant>;
+  payer: Keypair;
+  seedKey: Keypair;
+  mode: number;
+  shamMint: PublicKey;
+}): Promise<ReentrantHandles> {
+  const { program, payer, seedKey, mode, shamMint } = params;
+  const [syMarket] = PublicKey.findProgramAddressSync(
+    [Buffer.from("sy_market"), seedKey.publicKey.toBuffer()],
+    program.programId
+  );
+  await program.methods
+    .initialize(mode)
+    .accounts({
+      payer: payer.publicKey,
+      seedKey: seedKey.publicKey,
+      syMarket,
+      systemProgram: SystemProgram.programId,
+    } as any)
+    .signers([payer])
+    .rpc();
+  return {
+    syMarket,
+    syMint: shamMint,
+    programId: program.programId,
+    seedKey: seedKey.publicKey,
+  };
+}
+
+export async function setReentrantMode(params: {
+  program: Program<MaliciousSyReentrant>;
+  syMarket: PublicKey;
+  mode: number;
+}): Promise<void> {
+  await params.program.methods
+    .setMode(params.mode)
+    .accounts({ syMarket: params.syMarket } as any)
+    .rpc();
+}
+
+export interface SetupVaultOverReentrantParams {
+  core: Program<ClearstoneCore>;
+  reentrantProgram: Program<MaliciousSyReentrant>;
+  connection: Connection;
+  payer: Keypair;
+  curator: PublicKey;
+  reentrant: ReentrantHandles;
+  /** Caller-provided vault keypair — needed because the PT/YT mint
+   *  PDAs (which must appear in the ALT) are derived from the vault
+   *  account. Pass a fresh keypair per vault. */
+  vaultKeypair: Keypair;
+  /** The depositor whose signer slot will flow into the adapter's
+   *  reentrancy CPI. We must bake their pubkey into the vault ALT
+   *  because deposit_sy's AccountMeta list references it by ALT index. */
+  depositor: PublicKey;
+  /** Depositor's SY ATA — also baked into the ALT (sy_src of strip). */
+  depositorSyAta: PublicKey;
+  /** Depositor's PT/YT ATAs (pt_dst / yt_dst of strip; pt_src / yt_src of merge). */
+  depositorPtAta: PublicKey;
+  depositorYtAta: PublicKey;
+  startTimestamp: number;
+  duration: number;
+  interestBpsFee: number;
+  creatorFeeBps: number;
+  maxPySupply: anchor.BN;
+  minOpSizeStrip: anchor.BN;
+  minOpSizeMerge: anchor.BN;
+}
+
+/**
+ * Stands up a vault over the reentrant mock. Unlike setupVault, the
+ * ALT + CpiAccounts must pre-bake every account that the *inner* core
+ * re-invocation will need — the reentrant adapter has no other source
+ * of truth for those accounts.
+ */
+export async function setupVaultOverReentrant(
+  params: SetupVaultOverReentrantParams
+): Promise<VaultHandles> {
+  const {
+    core,
+    reentrantProgram,
+    connection,
+    payer,
+    curator,
+    reentrant,
+    vaultKeypair,
+    depositor,
+    depositorSyAta,
+    depositorPtAta,
+    depositorYtAta,
+    startTimestamp,
+    duration,
+    interestBpsFee,
+    creatorFeeBps,
+    maxPySupply,
+    minOpSizeStrip,
+    minOpSizeMerge,
+  } = params;
+  void reentrantProgram;
+
+  const corePid = core.programId;
+  const vault = vaultKeypair;
+  const [authority] = findVaultAuthority(vault.publicKey, corePid);
+  const [mintPt] = findMintPt(vault.publicKey, corePid);
+  const [mintYt] = findMintYt(vault.publicKey, corePid);
+  const [escrowYt] = findEscrowYt(vault.publicKey, corePid);
+  const [yieldPosition] = findYieldPosition(vault.publicKey, authority, corePid);
+  const [ptMetadata] = findPtMetadata(mintPt);
+  const escrowSy = getAssociatedTokenAddressSync(reentrant.syMint, authority, true);
+
+  // Vault's position in the reentrant adapter (keyed by authority).
+  const [vaultPosition] = PublicKey.findProgramAddressSync(
+    [Buffer.from("personal_position"), reentrant.syMarket.toBuffer(), authority.toBuffer()],
+    reentrant.programId
+  );
+
+  const treasuryAta = (
+    await getOrCreateAssociatedTokenAccount(
+      connection,
+      payer,
+      reentrant.syMint,
+      payer.publicKey
+    )
+  ).address;
+
+  // #[event_cpi] adds an event_authority PDA to every event-emitting ix.
+  // It's derived as seeds = [b"__event_authority"], program = core.
+  const [eventAuthority] = PublicKey.findProgramAddressSync(
+    [Buffer.from("__event_authority")],
+    corePid
+  );
+
+  // ALT — every pubkey the inner-core re-invocation needs must be here.
+  // We pre-compute the alt address so we can include the ALT's own
+  // pubkey in the extend list (needed because strip's
+  // `address_lookup_table` account is the ALT itself).
+  const slot = await connection.getSlot("finalized");
+  const [createIx, alt] = AddressLookupTableProgram.createLookupTable({
+    authority: payer.publicKey,
+    payer: payer.publicKey,
+    recentSlot: slot,
+  });
+  const altAddresses = [
+    reentrant.syMarket, //  0  adapter's sy_market
+    corePid,            //  1  core program (invoke target + event_cpi program)
+    depositor,          //  2  depositor (outer strip's signer, mut)
+    authority,          //  3  vault authority PDA
+    vault.publicKey,    //  4  vault account
+    depositorSyAta,     //  5  sy_src / sy_dst
+    escrowSy,           //  6  vault escrow_sy
+    depositorYtAta,     //  7  yt_dst / yt_src
+    depositorPtAta,     //  8  pt_dst / pt_src
+    mintYt,             //  9
+    mintPt,             // 10
+    TOKEN_PROGRAM_ID,   // 11
+    alt,                // 12  ALT-self (strip's address_lookup_table)
+    reentrant.programId,// 13  sy_program (adapter)
+    yieldPosition,      // 14
+    eventAuthority,     // 15
+  ];
+  const extendIx = AddressLookupTableProgram.extendLookupTable({
+    authority: payer.publicKey,
+    payer: payer.publicKey,
+    lookupTable: alt,
+    addresses: altAddresses,
+  });
+  await sendAndConfirmTransaction(
+    connection,
+    new Transaction().add(createIx, extendIx),
+    [payer],
+    { commitment: "confirmed" }
+  );
+  // Wait past the creation slot so the ALT is usable.
+  for (let i = 0; i < 40; i++) {
+    const current = await connection.getSlot("confirmed");
+    if (current > slot + 1) break;
+    await sleep(100);
+  }
+  const ALT_INDEX_OF_SELF = 12;
+
+  const ctx = (altIndex: number, writable: boolean, signer = false) => ({
+    altIndex,
+    isSigner: signer,
+    isWritable: writable,
+  });
+
+  // CpiAccounts.deposit_sy: adapter's first typed slot (sy_market) +
+  // everything core.strip needs in the strip account order +
+  // core_program as slot-1 of adapter's remaining_accounts so
+  // reinvoke_u64 can pull it off.
+  const depositSyList = [
+    ctx(0, false),                 // sy_market (adapter typed field)
+    ctx(1, false),                 // core_program (invoke target, first of rem_accounts)
+    // vvv core.strip account list vvv
+    ctx(2, true, true),            // depositor (signer, mut)
+    ctx(3, true),                  // authority (mut)
+    ctx(4, true),                  // vault (mut)
+    ctx(5, true),                  // sy_src (mut)
+    ctx(6, true),                  // escrow_sy (mut)
+    ctx(7, true),                  // yt_dst (mut)
+    ctx(8, true),                  // pt_dst (mut)
+    ctx(9, true),                  // mint_yt (mut)
+    ctx(10, true),                 // mint_pt (mut)
+    ctx(11, false),                // token_program
+    ctx(ALT_INDEX_OF_SELF, false), // address_lookup_table
+    ctx(13, false),                // sy_program (the adapter itself)
+    ctx(14, true),                 // yield_position (mut)
+    ctx(15, false),                // event_authority
+    ctx(1, false),                 // program (event_cpi "program" field = core)
+  ];
+
+  // CpiAccounts.withdraw_sy: adapter's first slot + core.merge accounts.
+  // merge's order differs slightly from strip — see merge.rs:
+  //   owner, authority, vault, sy_dst, escrow_sy, yt_src, pt_src,
+  //   mint_yt, mint_pt, token_program, sy_program, address_lookup_table,
+  //   yield_position, event_authority, program
+  const withdrawSyList = [
+    ctx(0, false),                 // sy_market
+    ctx(1, false),                 // core_program (invoke target)
+    ctx(2, true, true),            // owner (signer, mut)
+    ctx(3, true),                  // authority (mut)
+    ctx(4, true),                  // vault (mut)
+    ctx(5, true),                  // sy_dst (= same ATA as sy_src)
+    ctx(6, true),                  // escrow_sy (mut)
+    ctx(7, true),                  // yt_src (mut)
+    ctx(8, true),                  // pt_src (mut)
+    ctx(9, true),                  // mint_yt (mut)
+    ctx(10, true),                 // mint_pt (mut)
+    ctx(11, false),                // token_program
+    ctx(13, false),                // sy_program
+    ctx(ALT_INDEX_OF_SELF, false), // address_lookup_table
+    ctx(14, true),                 // yield_position (mut)
+    ctx(15, false),                // event_authority
+    ctx(1, false),                 // program
+  ];
+
+  // Minimal get_sy_state list (just sy_market; adapter's NoOpSyMarket
+  // only has one typed field).
+  const getSyStateList = [ctx(0, false)];
+
+  const cpiAccounts = {
+    getSyState: getSyStateList,
+    depositSy: depositSyList,
+    withdrawSy: withdrawSyList,
+    claimEmission: [] as any[][],
+    getPositionState: [ctx(0, false)],
+  };
+
+  // init_personal_account remaining_accounts for the adapter.
+  const remainingAccounts = [
+    { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+    { pubkey: authority, isSigner: false, isWritable: false },
+    { pubkey: reentrant.syMarket, isSigner: false, isWritable: false },
+    { pubkey: vaultPosition, isSigner: false, isWritable: true },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+  ];
+
+  await core.methods
+    .initializeVault(
+      startTimestamp,
+      duration,
+      interestBpsFee,
+      cpiAccounts,
+      minOpSizeStrip,
+      minOpSizeMerge,
+      "PT REENTRANT",
+      "tPTr",
+      "https://example.com/pt.json",
+      curator,
+      creatorFeeBps,
+      maxPySupply
+    )
+    .accounts({
+      payer: payer.publicKey,
+      authority,
+      vault: vault.publicKey,
+      mintPt,
+      mintYt,
+      escrowYt,
+      escrowSy,
+      mintSy: reentrant.syMint,
+      systemProgram: SystemProgram.programId,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      treasuryTokenAccount: treasuryAta,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      syProgram: reentrant.programId,
+      addressLookupTable: alt,
+      yieldPosition,
+      metadata: ptMetadata,
+      tokenMetadataProgram: METADATA_PROGRAM_ID,
+    } as any)
+    .remainingAccounts(remainingAccounts)
+    .signers([payer, vault])
+    .rpc();
+
+  return {
+    vault,
+    authority,
+    mintPt,
+    mintYt,
+    escrowYt,
+    escrowSy,
+    yieldPosition,
+    alt,
+    treasuryAta,
+    vaultPosition,
+    curator,
+  };
 }
 
 // ===== Convenience =====

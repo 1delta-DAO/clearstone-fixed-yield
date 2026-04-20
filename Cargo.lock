@@ -1856,6 +1856,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "malicious_sy_reentrant"
+version = "0.1.0"
+dependencies = [
+ "amount_value",
+ "anchor-lang",
+ "anchor-spl",
+ "getrandom 0.2.10",
+ "precise_number",
+ "sy_common",
+]
+
+[[package]]
 name = "memchr"
 version = "2.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

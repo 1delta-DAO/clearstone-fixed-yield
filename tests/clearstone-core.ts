@@ -13,8 +13,10 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program, AnchorProvider, BN } from "@coral-xyz/anchor";
 import { Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram } from "@solana/web3.js";
 import {
+  createMint,
   getAccount,
   getOrCreateAssociatedTokenAccount,
+  mintTo,
   transfer,
 } from "@solana/spl-token";
 import { assert, expect } from "chai";
@@ -22,6 +24,7 @@ import { assert, expect } from "chai";
 import type { ClearstoneCore } from "../target/types/clearstone_core";
 import type { GenericExchangeRateSy } from "../target/types/generic_exchange_rate_sy";
 import type { MaliciousSyNonsense } from "../target/types/malicious_sy_nonsense";
+import type { MaliciousSyReentrant } from "../target/types/malicious_sy_reentrant";
 import {
   createBaseMint,
   createAta,
@@ -40,11 +43,19 @@ import {
   createNonsenseMarket,
   setNonsenseMode,
   setupVaultOverNonsense,
+  createReentrantMarket,
+  setReentrantMode,
+  setupVaultOverReentrant,
+  REENTRANT_MODE_BENIGN,
+  REENTRANT_MODE_REENTER_ON_DEPOSIT,
+  REENTRANT_MODE_REENTER_ON_WITHDRAW,
+  findMintPt,
+  findMintYt,
   SyMarketHandles,
   VaultHandles,
   MarketHandles,
 } from "./fixtures";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 // ===== Shared provider =====
 
@@ -54,6 +65,7 @@ const payer = (provider.wallet as any).payer as Keypair;
 const syProgram = anchor.workspace.genericExchangeRateSy as Program<GenericExchangeRateSy>;
 const core = anchor.workspace.clearstoneCore as Program<ClearstoneCore>;
 const nonsense = anchor.workspace.maliciousSyNonsense as Program<MaliciousSyNonsense>;
+const reentrant = anchor.workspace.maliciousSyReentrant as Program<MaliciousSyReentrant>;
 
 // ===== Full-stack fixture =====
 
@@ -554,15 +566,267 @@ describe("clearstone-core :: malicious-SY isolation", () => {
 
 // ===== Reentrancy =====
 //
-// Runtime proof-of-block requires a bespoke `malicious_sy_reentrant`
-// mock adapter (CPIs back into clearstone_core during deposit_sy). Not
-// written — the M2 Rust unit tests (`reentrancy::tests` +
-// `guard_offset_matches_layout`) cover the latch logic.
+// These run against the `malicious_sy_reentrant` adapter, which CPIs
+// back into clearstone_core during its own deposit_sy / withdraw_sy.
+// The vault creator (= test) wires CpiAccounts so the inner re-invoke
+// has every account it needs — modelling a worst-case where the whole
+// vault setup is hostile. The guard must still block recursion.
 
 describe("clearstone-core :: reentrancy (runtime mock)", () => {
-  it.skip("reentrant SY cannot re-invoke strip during deposit_sy CPI", async () => {});
-  it.skip("reentrant SY cannot re-invoke trade_pt during withdraw_sy CPI", async () => {});
-  it.skip("guard clears after a successful ix so the next tx can enter again", async () => {});
+  interface ReentrantStack {
+    vault: Awaited<ReturnType<typeof setupVaultOverReentrant>>;
+    syMint: PublicKey;
+    mintAuthority: Keypair;
+    seedKey: Keypair;
+    syMarket: PublicKey;
+    depositor: Keypair;
+    depositorSy: PublicKey;
+    depositorPt: PublicKey;
+    depositorYt: PublicKey;
+  }
+
+  async function reentrantStack(mode: number): Promise<ReentrantStack> {
+    // Sham SY mint — the reentrant adapter doesn't manage SY transfers,
+    // so we mint via SPL directly. Authority is a dedicated keypair to
+    // avoid colliding with `payer` when core calls the adapter.
+    const mintAuthority = Keypair.generate();
+    const shamMint = await createMint(
+      provider.connection,
+      payer,
+      mintAuthority.publicKey,
+      null,
+      6
+    );
+    const seedKey = Keypair.generate();
+    const handles = await createReentrantMarket({
+      program: reentrant,
+      payer,
+      seedKey,
+      mode,
+      shamMint,
+    });
+
+    const depositor = await fundedUser();
+    const depositorSy = (
+      await getOrCreateAssociatedTokenAccount(
+        provider.connection,
+        payer,
+        shamMint,
+        depositor.publicKey
+      )
+    ).address;
+    // Mint 10x the amount we'll use — outer strip + inner strip both
+    // transfer SY before we hit the guard; starving the inner transfer
+    // would mask the reentrancy error with InsufficientFunds.
+    await mintTo(
+      provider.connection,
+      payer,
+      shamMint,
+      depositorSy,
+      mintAuthority,
+      10_000_000
+    );
+
+    const clockAccount = await provider.connection.getAccountInfo(
+      anchor.web3.SYSVAR_CLOCK_PUBKEY
+    );
+    const onchainNow = Number(clockAccount!.data.readBigInt64LE(32));
+
+    // PT/YT mints are vault-PDAs, so their ATAs are known from the
+    // vault keypair alone. We pre-compute to bake them into the ALT.
+    const vaultKp = Keypair.generate();
+    const [mintPt] = findMintPt(vaultKp.publicKey, core.programId);
+    const [mintYt] = findMintYt(vaultKp.publicKey, core.programId);
+    const depositorPt = getAssociatedTokenAddressSync(mintPt, depositor.publicKey);
+    const depositorYt = getAssociatedTokenAddressSync(mintYt, depositor.publicKey);
+
+    const vault = await setupVaultOverReentrant({
+      core,
+      reentrantProgram: reentrant,
+      connection: provider.connection,
+      payer,
+      curator: payer.publicKey,
+      reentrant: handles,
+      vaultKeypair: vaultKp,
+      depositor: depositor.publicKey,
+      depositorSyAta: depositorSy,
+      depositorPtAta: depositorPt,
+      depositorYtAta: depositorYt,
+      startTimestamp: onchainNow,
+      duration: 86_400 * 30,
+      interestBpsFee: 100,
+      creatorFeeBps: 500,
+      maxPySupply: new BN("1000000000000"),
+      minOpSizeStrip: new BN(1),
+      minOpSizeMerge: new BN(1),
+    });
+
+    // Create the PT/YT ATAs now that the mints exist.
+    await getOrCreateAssociatedTokenAccount(
+      provider.connection,
+      payer,
+      vault.mintPt,
+      depositor.publicKey
+    );
+    await getOrCreateAssociatedTokenAccount(
+      provider.connection,
+      payer,
+      vault.mintYt,
+      depositor.publicKey
+    );
+
+    return {
+      vault,
+      syMint: shamMint,
+      mintAuthority,
+      seedKey,
+      syMarket: handles.syMarket,
+      depositor,
+      depositorSy,
+      depositorPt,
+      depositorYt,
+    };
+  }
+
+  it("reentrant SY cannot re-invoke strip during deposit_sy CPI", async () => {
+    const s = await reentrantStack(REENTRANT_MODE_REENTER_ON_DEPOSIT);
+
+    let err: any;
+    try {
+      await core.methods
+        .strip(new BN(1_000_000))
+        .accounts({
+          depositor: s.depositor.publicKey,
+          authority: s.vault.authority,
+          vault: s.vault.vault.publicKey,
+          sySrc: s.depositorSy,
+          escrowSy: s.vault.escrowSy,
+          ytDst: s.depositorYt,
+          ptDst: s.depositorPt,
+          mintYt: s.vault.mintYt,
+          mintPt: s.vault.mintPt,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          addressLookupTable: s.vault.alt,
+          syProgram: reentrant.programId,
+          yieldPosition: s.vault.yieldPosition,
+        } as any)
+        .remainingAccounts([
+          { pubkey: s.syMarket, isSigner: false, isWritable: false },
+        ])
+        .signers([s.depositor])
+        .rpc();
+      assert.fail("outer strip must be rejected by reentrancy guard");
+    } catch (e) {
+      err = e;
+    }
+    expect(String(err)).to.match(
+      /ReentrancyLocked|Reentrancy locked|6030/i,
+      "outer strip should fail with ReentrancyLocked"
+    );
+  });
+
+  it("reentrant SY cannot re-invoke merge during withdraw_sy CPI", async () => {
+    // Set up with benign mode first so we can strip some PT/YT for the
+    // owner to merge — then flip mode and call merge.
+    const s = await reentrantStack(REENTRANT_MODE_BENIGN);
+
+    // Outer strip (benign): gives the depositor PT + YT to merge with.
+    await core.methods
+      .strip(new BN(1_000_000))
+      .accounts({
+        depositor: s.depositor.publicKey,
+        authority: s.vault.authority,
+        vault: s.vault.vault.publicKey,
+        sySrc: s.depositorSy,
+        escrowSy: s.vault.escrowSy,
+        ytDst: s.depositorYt,
+        ptDst: s.depositorPt,
+        mintYt: s.vault.mintYt,
+        mintPt: s.vault.mintPt,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        addressLookupTable: s.vault.alt,
+        syProgram: reentrant.programId,
+        yieldPosition: s.vault.yieldPosition,
+      } as any)
+      .remainingAccounts([
+        { pubkey: s.syMarket, isSigner: false, isWritable: false },
+      ])
+      .signers([s.depositor])
+      .rpc();
+
+    // Flip mode to reenter-on-withdraw.
+    await setReentrantMode({
+      program: reentrant,
+      syMarket: s.syMarket,
+      mode: REENTRANT_MODE_REENTER_ON_WITHDRAW,
+    });
+
+    let err: any;
+    try {
+      await core.methods
+        .merge(new BN(1))
+        .accounts({
+          owner: s.depositor.publicKey,
+          authority: s.vault.authority,
+          vault: s.vault.vault.publicKey,
+          syDst: s.depositorSy,
+          escrowSy: s.vault.escrowSy,
+          ytSrc: s.depositorYt,
+          ptSrc: s.depositorPt,
+          mintYt: s.vault.mintYt,
+          mintPt: s.vault.mintPt,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          syProgram: reentrant.programId,
+          addressLookupTable: s.vault.alt,
+          yieldPosition: s.vault.yieldPosition,
+        } as any)
+        .remainingAccounts([
+          { pubkey: s.syMarket, isSigner: false, isWritable: false },
+        ])
+        .signers([s.depositor])
+        .rpc();
+      assert.fail("outer merge must be rejected by reentrancy guard");
+    } catch (e) {
+      err = e;
+    }
+    expect(String(err)).to.match(
+      /ReentrancyLocked|Reentrancy locked|6030/i,
+      "outer merge should fail with ReentrancyLocked"
+    );
+  });
+
+  it("guard clears after a successful ix so the next strip succeeds", async () => {
+    // Use the generic adapter — a happy-path double-strip proves the
+    // guard byte is cleared on ix completion (otherwise the second
+    // strip would fail with ReentrancyLocked).
+    const stack = await freshStack();
+    await stripWithGenericAdapter({
+      core,
+      adapter: syProgram,
+      depositor: stack.user,
+      sy: stack.sy,
+      vault: stack.vault,
+      sySrc: stack.userSyAta,
+      ptDst: stack.userPtAta,
+      ytDst: stack.userYtAta,
+      amount: new BN(1_000_000),
+    });
+    // Second strip in a new tx — hits enter on a guard that *must* be
+    // clear, or this throws.
+    await stripWithGenericAdapter({
+      core,
+      adapter: syProgram,
+      depositor: stack.user,
+      sy: stack.sy,
+      vault: stack.vault,
+      sySrc: stack.userSyAta,
+      ptDst: stack.userPtAta,
+      ytDst: stack.userYtAta,
+      amount: new BN(1_000_000),
+    });
+    const pt = (await getAccount(provider.connection, stack.userPtAta)).amount;
+    expect(pt >= 2_000_000n).to.equal(true, "both strips should have landed");
+  });
 });
 
 // ===== Curator auth =====

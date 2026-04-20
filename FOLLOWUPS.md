@@ -31,7 +31,8 @@ guard to collide with.
 New test: [guard_offset_matches_layout](programs/clearstone_core/src/reentrancy.rs)
 catches any prefix-field addition that would silently move the guard byte.
 
-**Still open:** the runtime mock-SY-reentrancy test (M6).
+**Still open:** ~~the runtime mock-SY-reentrancy test (M6)~~ — resolved
+below.
 
 ## ✅ M5 — ATH monotonicity in reference adapter (**RESOLVED**)
 
@@ -141,10 +142,10 @@ publish the hash, pin into the audit tag.
 - No tests. Once the gaps above are filled, add tests parallel to
   core's virtualization_tests.
 
-## M6 — Integration test suite: nearly complete
+## ✅ M6 — Integration test suite (**RESOLVED**)
 
-**All non-reentrancy tests landed as real `it(...)` bodies** against
-the generated IDL types. `anchor build` + `tsc --noEmit` green.
+**All 16 test cases landed as real `it(...)` bodies** against the
+generated IDL types. `anchor build` + `tsc --noEmit` green.
 
 Coverage by category:
 
@@ -162,19 +163,16 @@ Coverage by category:
 - **AMM invariants** (3): 1-wei SY donation doesn't shift trade_pt
   output beyond 1% (I-M3); first-LP sandwich capped at proportional
   share; add → withdraw ≤ original deposit (I-M2).
-
-**Remaining skipped: reentrancy (3).** The guard mechanics are
-already proven by Rust unit tests in [reentrancy::tests](programs/clearstone_core/src/reentrancy.rs)
-(`guard_offset_matches_layout`, `enter_on_set_latch_fails`,
-`enter_leave_enter_roundtrip`, plus 24/24 in `cargo test`). The
-runtime mock would add end-to-end assurance but designing a
-`malicious_sy_reentrant` that can reconstruct a valid CPI back into
-core from inside its own CPI boundary is non-trivial — the attacker
-only receives the accounts listed in `CpiAccounts.deposit_sy` (7 for
-the generic adapter), which don't include the vault account needed
-to construct a second strip. A proper runtime demonstration would
-need a custom `malicious_sy_reentrant` adapter whose Accounts struct
-includes the vault directly so it can re-invoke. M8 blocker.
+- **Reentrancy** (3): runtime coverage via a bespoke
+  [malicious_sy_reentrant](reference_adapters/malicious_sy_reentrant/src/lib.rs)
+  adapter. The adapter's `deposit_sy` / `withdraw_sy` re-invoke
+  `clearstone_core.strip` / `.merge` on the same vault. The test
+  creator bakes every inner-call account (vault, core program,
+  depositor signer, etc.) into the vault's ALT + `CpiAccounts` so the
+  adapter has everything it needs — modelling a worst-case where the
+  full vault setup is hostile. The guard byte at offset 42 still
+  blocks both recursions. Third case: double-strip on the generic
+  adapter proves the guard clears after a successful ix.
 
 ## M5 — Reference adapter runtime-untested
 
