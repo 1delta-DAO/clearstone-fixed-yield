@@ -1,5 +1,5 @@
 [workspace]
-members = ["libraries/*", "programs/*", "reference_adapters/*"]
+members = ["libraries/*", "programs/*", "reference_adapters/*", "periphery/*"]
 resolver = "2"
 
 [profile.release]

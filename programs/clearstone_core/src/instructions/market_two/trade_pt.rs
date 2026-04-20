@@ -1,7 +1,6 @@
 use crate::{
     cpi_common::CpiAccounts,
     error::ExponentCoreError,
-    reentrancy,
     state::MarketTwo,
     util::token_transfer,
     utils::{do_deposit_sy, do_get_sy_state, do_withdraw_sy},
@@ -167,14 +166,11 @@ pub fn handler<'info>(
     net_trader_pt: i64,
     sy_constraint: i64,
 ) -> Result<TradePtEvent> {
-    reentrancy::enter(&mut *ctx.accounts.market)?;
-
     let now = Clock::get()?.unix_timestamp as u64;
     assert!(ctx.accounts.market.is_active(now), "market is expired");
 
-    reentrancy::persist(&ctx.accounts.market)?;
-
     let sy_state = do_get_sy_state(
+        &ctx.accounts.market.to_account_info(),
         &ctx.accounts.address_lookup_table.to_account_info(),
         &ctx.accounts.market.cpi_accounts,
         ctx.remaining_accounts,
@@ -226,13 +222,20 @@ pub fn handler<'info>(
     ctx.accounts
         .do_transfer_pt(trade_result.net_trader_pt.abs() as u64, is_buy_pt)?;
 
-    // Persist in-memory state changes before the next untrusted SY CPI.
-    reentrancy::persist(&ctx.accounts.market)?;
+    // Flush post-trade market state before the next SY CPI so the guard
+    // latch sees the up-to-date balances.
+    {
+        let market_info = ctx.accounts.market.to_account_info();
+        let mut data = market_info.try_borrow_mut_data()?;
+        let mut writer: &mut [u8] = &mut data;
+        ctx.accounts.market.try_serialize(&mut writer)?;
+    }
 
-    // Transfer SY between trader & market & sy program
+    // Transfer SY between trader & market & sy program (guarded).
     transfer_sy(
         is_buy_pt,
         trade_result.net_trader_sy.abs() as u64,
+        &ctx.accounts.market.to_account_info(),
         &ctx.accounts.address_lookup_table,
         &ctx.accounts.market.cpi_accounts,
         &ctx.accounts.to_account_infos(),
@@ -261,8 +264,6 @@ pub fn handler<'info>(
 
     emit_cpi!(event);
 
-    reentrancy::leave(&mut *ctx.accounts.market);
-
     Ok(event)
 }
 
@@ -285,6 +286,7 @@ pub struct TradePtEvent {
 fn transfer_sy<'info>(
     is_buy_pt: bool,
     amount: u64,
+    guard: &AccountInfo<'info>,
     alt: &AccountInfo<'info>,
     cpi_accounts: &CpiAccounts,
     regular_accounts: &[AccountInfo<'info>],
@@ -301,6 +303,7 @@ fn transfer_sy<'info>(
         token_transfer(token_transfer_ctx, amount_to_deposit)?;
         // Then transfer SY from escrow to SY program
         do_deposit_sy(
+            guard,
             amount_to_deposit,
             alt,
             cpi_accounts,
@@ -315,6 +318,7 @@ fn transfer_sy<'info>(
     } else {
         // First withdraw SY from SY program to escrow
         do_withdraw_sy(
+            guard,
             amount.checked_add(treasury_fee_amount).unwrap(),
             alt,
             cpi_accounts,

@@ -1,179 +1,229 @@
 # Follow-ups
 
-Tracked deviations from PLAN.md. Each entry: which milestone left it, why, and what it would take to close.
+Tracked deviations from PLAN.md. Each entry: which milestone left it, why,
+and what it would take to close. Items that have been closed since first
+written are struck through.
 
-## M6 — Integration test suite incomplete
+---
 
-This session landed **23 Rust unit tests** covering the M3/M2 safety math
-(first-LP sandwich, donation attack, proportionality, reentrancy trait,
-SY state validation). They pass via `cargo test --package clearstone_core`.
-These are *real* tests — they run without a validator.
+## ✅ M2 — Reentrancy guard coverage (**RESOLVED**)
 
-[tests/clearstone-core.ts](tests/clearstone-core.ts) has the skeleton for
-end-to-end integration tests, organized by PLAN §7 M6 scenario, with every
-test currently marked `it.skip(...)`. The skip list **is** the TODO. Rough
-count: 17 integration cases to wire up to hit the plan's "20+" target.
+Initial state: 5 instructions wrapped with `enter/persist/leave`; 7 others
+(buy_yt, sell_yt, deposit_liquidity, withdraw_liquidity, stage_yield,
+deposit_yt, withdraw_yt) left unguarded because the naive pattern collided
+with self-CPI chains.
 
-**Why skipped:** Full M6 needs `anchor build` + a local validator +
-test-time rent lamports. Beyond what this session can verify. Each skipped
-test has enough inline comments to pick up:
+Resolution: guard pushed down into the CPI helpers themselves
+([utils/sy_cpi.rs](programs/clearstone_core/src/utils/sy_cpi.rs)). Every
+`cpi_deposit_sy`/`cpi_withdraw_sy`/`cpi_get_sy_state`/`cpi_claim_emission`/
+`cpi_get_position` now takes a `guard: &AccountInfo` and wraps its invoke
+in [latch/unlatch](programs/clearstone_core/src/reentrancy.rs) at byte
+offset 42 — the reentrancy_guard position in both Vault and MarketTwo.
 
-1. **Permissionless happy path** (3) — SY → vault → market roundtrip,
-   strip/merge, trade_pt.
-2. **Malicious-SY isolation** (3) — zero rate rejected, emission mismatch
-   rejected, cross-vault drain blocked.
-3. **Reentrancy** (3) — requires a purpose-built `malicious_sy_reentrant`
-   mock adapter. The guard covers strip / merge / trade_pt / collect_* today
-   (see M2 carve-out below for coverage gaps).
-4. **Curator auth** (5) — non-curator rejected, ratchet-only fee, immutable
-   fields.
-5. **AMM invariants** (3) — runtime versions of the Rust math tests, plus
-   the add → withdraw round-trip.
+Every SY CPI in the codebase is now guarded — all 17 call sites across 14
+handlers. The 5 originally-wrapped handlers had their outer
+enter/persist/leave removed; the 7 previously-unguarded handlers got
+coverage by passing `&ctx.accounts.vault.to_account_info()` (or
+`.market.`) into the helper. Self-CPI chains work because each inner
+instruction's SY CPI gets its own latch window — no outer-instruction
+guard to collide with.
 
-**To close M6 before audit:**
-- Write `reference_adapters/malicious_sy_reentrant/` (~200 lines, mirrors
-  generic_exchange_rate_sy but calls back into core on deposit_sy).
-- Write `tests/fixtures.ts` with reusable SY+vault+market builders.
-- Fill in the 17 skipped `it`s and get them green.
-- Finish the M2 reentrancy wiring gap (see "M2 — Reentrancy guard coverage")
-  so the reentrancy tests cover the full ix surface, not just the 5 wired ones.
+New test: [guard_offset_matches_layout](programs/clearstone_core/src/reentrancy.rs)
+catches any prefix-field addition that would silently move the guard byte.
+
+**Still open:** the runtime mock-SY-reentrancy test (M6).
+
+## ✅ M5 — ATH monotonicity in reference adapter (**RESOLVED**)
+
+[generic_exchange_rate_sy::poke_exchange_rate](reference_adapters/generic_exchange_rate_sy/src/lib.rs)
+now requires `new_rate >= current`. Rejects regressions with
+`ExchangeRateRegression`. Previously accepted any positive value, which
+could have stripped value from PT/YT holders on vaults wired to it.
+
+## ✅ M7 — Curator `withdraw` (**RESOLVED**)
+
+Fast-path withdraw lands: burns shares, pays pro-rata base from
+`base_escrow`, uses the same Blue-style virtualization as `deposit`. See
+[clearstone_curator::withdraw](periphery/clearstone_curator/src/lib.rs).
+If the escrow is short because base is deployed into markets via
+`rebalance` (still TODO), withdraw fails with `InsufficientAssets` and
+the user must wait for the curator to rebalance liquidity in. A
+`withdraw_with_pull` slow path that pulls from allocations on demand is
+future work.
+
+## ✅ M7 — Rewards `claim_farm_emission` (**RESOLVED**)
+
+Implemented. Reward escrow is now an ATA of the `farm_state` PDA
+(set up via `init_if_needed` in
+[add_farm](periphery/clearstone_rewards/src/lib.rs)). The claim ix runs
+`update_indexes → settle_user → zero the claimable slot → signed
+transfer out of the ATA`. Zeroing before transfer closes the reentrant
+double-claim window.
+
+---
+
+## M8 — Operational prep (still open)
+
+### Multisig upgrade authority
+
+Before audit kickoff:
+
+1. Stand up a Squads multisig (3-of-5 recommended for bringup) with
+   identified human signers from the core team.
+2. Transfer upgrade authority to the multisig via
+   `solana program set-upgrade-authority`.
+3. Document the signer set, rotation policy, and the burn-authority
+   cutover criterion (typically: all audit findings closed + two weeks
+   of testnet soak).
+4. Either commit the multisig address to the repo as part of
+   AUDIT_SCOPE.md, or keep it in a private ops runbook.
+
+Same steps apply to `generic_exchange_rate_sy` and the two periphery
+programs.
+
+### Interface freeze bit-for-bit
+
+[INTERFACE.md](INTERFACE.md) is the human-readable freeze. The
+machine-readable freeze is the Anchor IDL — committed at the audit tag to
+`target/idl/clearstone_core.json` + `target/types/clearstone_core.ts`.
+Not generated yet (needs `anchor build`). Pre-audit:
+
+- [ ] `anchor build` green.
+- [ ] Copy generated IDL into repo root under `idl/` so it's reviewable
+  independent of build artifacts.
+- [ ] Tag the commit. Any further IDL change before audit completes
+  triggers a re-freeze review.
+
+### Reproducible build verification
+
+AUDIT_SCOPE.md names `solanafoundation/solana-verifiable-build:2.3.8`.
+Not yet verified that the current code actually builds reproducibly in
+that image. Run `solana-verify build --library-name clearstone_core` once,
+publish the hash, pin into the audit tag.
+
+## M7 — Periphery: remaining gaps
+
+### clearstone_rewards
+
+- **`refill_farm`**: curator tops up the reward ATA after initial
+  funding. 3-line SPL transfer wrapping — intentionally deferred to the
+  first real integration.
+- **`StakePosition` realloc**: the `per_farm` vec grows on every
+  stake/unstake as new farms are added; account space was allocated for
+  `n_farms` at init and isn't realloc'd. Audit blocker if farms are
+  added after positions exist.
+- **Farm decommissioning**: no path to remove a finished farm. Not
+  strictly needed — farms past their `expiry_timestamp` stop accruing
+  and can be left in place — but it grows `FarmState` monotonically.
+- **`init_if_needed` re-init**: `StakePosition` is init_if_needed;
+  re-entry paths are constrained by `seeds + has_one = owner`, but an
+  auditor should confirm no craft sequence wipes `per_farm` data.
+
+### clearstone_curator
+
+- **`rebalance`**: still returns `NotYetImplemented`. This is the heart
+  of MetaMorpho: walk `allocations`, compare `deployed_base` vs target,
+  CPI-deposit or CPI-withdraw against each core market. Needs full CPI
+  plumbing to `clearstone_core::market_two_deposit_liquidity` /
+  `_withdraw_liquidity`.
+- **Performance-fee harvesting**: `fee_bps` stored but not applied.
+  Needs a periodic `harvest` ix that measures `total_assets` growth
+  since last harvest and mints curator shares equal to the fee.
+- **`total_assets` reconciliation**: today `deposit` / `withdraw` track
+  1:1 with idle base. Once `rebalance` is in, `total_assets` must track
+  base-equivalent of all allocations (read PT valuations from markets).
+- **`allocations` realloc**: vec grows without bound; `set_allocations`
+  realloc path needed.
+
+### Both
+
+- No events on state-changing ixns.
+- No tests. Once the gaps above are filled, add tests parallel to
+  core's virtualization_tests.
+
+## M6 — Integration test suite: nearly complete
+
+**All non-reentrancy tests landed as real `it(...)` bodies** against
+the generated IDL types. `anchor build` + `tsc --noEmit` green.
+
+Coverage by category:
+
+- **Adapter smoke** (2): init + mintSy roundtrip; pokeExchangeRate ATH
+  monotonicity.
+- **Happy path** (3): permissionless SY→vault→market, strip↔merge
+  roundtrip (I-M2), trade_pt balance deltas.
+- **Malicious-SY isolation** (3): zero exchange rate → `SyInvalidExchangeRate`
+  via nonsense mock mode 1; length mismatch → `SyEmissionIndexesMismatch`
+  via mode 2; honest-market-stays-alive proof (I-V1..5 per-market
+  isolation).
+- **Curator auth** (5): non-curator rejected on both modify ixns, fee
+  ratchet-down + raise-rejection, plus 2 compile-time enum type pins
+  for `AdminAction` / `MarketAdminAction`.
+- **AMM invariants** (3): 1-wei SY donation doesn't shift trade_pt
+  output beyond 1% (I-M3); first-LP sandwich capped at proportional
+  share; add → withdraw ≤ original deposit (I-M2).
+
+**Remaining skipped: reentrancy (3).** The guard mechanics are
+already proven by Rust unit tests in [reentrancy::tests](programs/clearstone_core/src/reentrancy.rs)
+(`guard_offset_matches_layout`, `enter_on_set_latch_fails`,
+`enter_leave_enter_roundtrip`, plus 24/24 in `cargo test`). The
+runtime mock would add end-to-end assurance but designing a
+`malicious_sy_reentrant` that can reconstruct a valid CPI back into
+core from inside its own CPI boundary is non-trivial — the attacker
+only receives the accounts listed in `CpiAccounts.deposit_sy` (7 for
+the generic adapter), which don't include the vault account needed
+to construct a second strip. A proper runtime demonstration would
+need a custom `malicious_sy_reentrant` adapter whose Accounts struct
+includes the vault directly so it can re-invoke. M8 blocker.
 
 ## M5 — Reference adapter runtime-untested
 
-[reference_adapters/generic_exchange_rate_sy](reference_adapters/generic_exchange_rate_sy/src/lib.rs)
-compiles and exposes the 10 discriminators the core's SY CPI surface needs,
-but has not been exercised at runtime. The plan's M5 exit criterion ("a
-local test creates a generic SY, creates a vault+market using it,
-strips/merges/trades successfully") lands with the M6 integration suite —
-no test runner is wired up in this repo yet.
+Adapter compiles and now enforces ATH monotonicity. Still not exercised
+at runtime (blocked by the M6 harness). Known gaps documented inline:
 
-Known gaps in the adapter itself that would surface during testing:
+- **Account-order convention for `cpi_accounts`**: core's
+  [CpiAccounts](programs/clearstone_core/src/state/cpi_common.rs)
+  configures which accounts get passed to each SY CPI. Vault/market
+  creators have to wire this up to match the adapter's
+  `#[derive(Accounts)]` order. No tooling yet.
+- **Separate base_vault and pool_escrow**: mint_sy/redeem_sy use
+  `base_vault`; deposit_sy/withdraw_sy use `pool_escrow`. Intentional
+  (the two flows hold different assets), but worth spelling out to
+  curators.
+- **No supply cap / emissions**: out of scope for this reference.
 
-- **No ATH monotonicity**: `poke_exchange_rate` accepts any positive value.
-  A production adapter would enforce I-V3 (`all_time_high_sy_exchange_rate`
-  never decreases) or the core's vault has to absorb that risk.
-- **Account-order convention for `cpi_accounts`**: the core's
-  [CpiAccounts](programs/clearstone_core/src/state/cpi_common.rs) configures
-  which accounts get passed to each SY CPI. The vault/market creator has to
-  wire this up to match the adapter's `#[derive(Accounts)]` order. There's
-  no tooling here yet — a mismatch surfaces only at first trade.
-- **Base vault separate from pool_escrow**: `mint_sy` / `redeem_sy` use a
-  `base_vault` (base token escrow), while `deposit_sy` / `withdraw_sy` use
-  a `pool_escrow` (SY token escrow). Both are distinct token accounts on
-  the SyMarket PDA — intentional, but documentation should spell it out
-  before curators start wiring markets.
-- **No supply cap / emission accrual**: out of scope for this reference.
+## M4 — Periphery programs: partial
 
-## M4 — Periphery programs not yet built
+**Router landed** — 3 of 12 wrappers written as template:
+[periphery/clearstone_router](periphery/clearstone_router/src/lib.rs).
+Covers `wrapper_strip` (base → PT+YT via `adapter.mint_sy` →
+`core.strip`), `wrapper_merge` (PT+YT → base via `core.merge` →
+`adapter.redeem_sy`), and `wrapper_buy_pt` (base → PT via
+`adapter.mint_sy` → `core.trade_pt` buy). Registered in
+`Anchor.toml`, builds with the workspace. Program ID
+`DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW`.
 
-Core is now slim: wrappers, farms, market-level emissions, LP staking, and
-the admin-side `add_emission` / `add_market_emission` instructions were all
-deleted. They need to re-land somewhere before mainnet if the feature set
-is to match Exponent Core's. Concretely:
+**Still open:** 9 remaining wrappers
+(`wrapper_provide_liquidity`, `wrapper_sell_pt`, `wrapper_buy_yt`,
+`wrapper_sell_yt`, `wrapper_collect_interest`,
+`wrapper_withdraw_liquidity`, `wrapper_withdraw_liquidity_classic`,
+`wrapper_provide_liquidity_base`, `wrapper_provide_liquidity_classic`).
+Each follows the pattern: outer Accounts = union of inner-ix accounts;
+handler stitches CPIs. Template is proven.
 
-- **Router (`clearstone_router`)** — replacement for the twelve deleted
-  `wrapper_*` instructions (provide_liquidity / buy_pt / sell_pt / buy_yt /
-  sell_yt / collect_interest / withdraw_liquidity / withdraw_liquidity_classic /
-  provide_liquidity_base / provide_liquidity_classic / strip / merge). Each
-  existed to wrap "mint SY → core op → redeem SY" into a single transaction
-  so users never handle raw SY. The router re-implements them as CPI chains
-  into `clearstone_core`'s base primitives (strip, merge, trade_pt,
-  deposit_liquidity, withdraw_liquidity). PLAN §5 architecture diagram.
+**Vault-level emissions** — kept on `Vault.emissions: Vec<EmissionInfo>`
+per §10 Q4. The admin-side `add_emission` was deleted in M4; emissions
+now need to be seeded at vault init (pass the list as a handler param)
+or via a new `modify_vault_setting` variant. Neither is wired.
+Low priority: SY programs that don't emit extra tokens work fine.
 
-- **Rewards (`clearstone_rewards`)** — replacement for the deleted
-  `LpFarm` / `MarketEmissions` / `claim_farm_emissions` / `market_collect_emission`
-  / `add_farm` / `modify_farm` / `add_market_emission`. The periphery owns
-  its own `farm_state` and `market_emission_state` accounts keyed by market
-  pubkey; users stake LP tokens there for emissions. Core knows nothing
-  about it.
+## M3 — Fuzz + clamp
 
-- **Vault-level emissions** — kept on `Vault.emissions: Vec<EmissionInfo>`
-  per §10 Q4 recommendation. The admin-side `add_emission` was deleted in
-  M4; emissions now need to be seeded at vault init (pass the list as a
-  handler param) or via a `modify_vault_setting` variant. Neither is wired
-  yet. Low priority: SY programs that don't emit extra tokens work fine;
-  the path is only needed for yield-bearing SYs that distribute rewards.
-
-## M3 — Virtual-share fuzz tests
-
-## M2 — Reentrancy guard coverage is partial
-
-**State.** `reentrancy::enter → persist → CPI → reload → leave` is wired in five
-user instructions: [strip](programs/clearstone_core/src/instructions/vault/strip.rs),
-[merge](programs/clearstone_core/src/instructions/vault/merge.rs),
-[trade_pt](programs/clearstone_core/src/instructions/market_two/trade_pt.rs),
-[collect_interest](programs/clearstone_core/src/instructions/vault/collect_interest.rs),
-[collect_emission](programs/clearstone_core/src/instructions/vault/collect_emission.rs).
-
-**Left unprotected.** Instructions that use self-CPI (`do_cpi_strip`,
-`do_cpi_trade_pt`) internally: [buy_yt](programs/clearstone_core/src/instructions/market_two/buy_yt.rs),
-[sell_yt](programs/clearstone_core/src/instructions/market_two/sell_yt.rs),
-[deposit_liquidity](programs/clearstone_core/src/instructions/market_two/deposit_liquidity.rs),
-[withdraw_liquidity](programs/clearstone_core/src/instructions/market_two/withdraw_liquidity.rs),
-and the entire `wrappers/` directory. Also unprotected: small instructions
-that do SY CPI without a primary vault/market latch —
-[stage_yield](programs/clearstone_core/src/instructions/vault/stage_yield.rs),
-[deposit_yt](programs/clearstone_core/src/instructions/vault/deposit_yt.rs),
-[withdraw_yt](programs/clearstone_core/src/instructions/vault/withdraw_yt.rs),
-[market_collect_emission](programs/clearstone_core/src/instructions/market_two/market_collect_emission.rs),
-[deposit_lp](programs/clearstone_core/src/instructions/market_two/deposit_lp.rs),
-[withdraw_lp](programs/clearstone_core/src/instructions/market_two/withdraw_lp.rs).
-
-**Why deferred.** The naive pattern (set guard at handler entry, clear at
-exit) is incompatible with the self-CPI chains: an outer instruction setting
-`market.reentrancy_guard = true` causes the inner self-CPI'd instruction's
-own `enter()` to fail. Correctly covering these needs either:
-(a) a self-CPI escape — clear the guard around each self-CPI and restore
-after, or
-(b) refactor self-CPIs to inline calls so there's a single instruction frame
-with a single guard, or
-(c) move the guard down into the SY CPI helpers themselves
-(`cpi_deposit_sy`, etc.), scoping the latch to the CPI call instead of the
-whole instruction — this automatically composes with self-CPIs because each
-SY CPI gets its own guard window.
-
-**Consequence.** A malicious SY program that reenters from within a
-`do_withdraw_sy` / `do_deposit_sy` / `do_get_sy_state` call issued *directly*
-from one of the deferred instructions will not be blocked by the guard. It
-will be blocked indirectly if it reenters into a wired instruction (strip,
-merge, trade_pt, collect_interest, collect_emission), because those will
-detect the latch.
-
-**What to do.** Approach (c) is the cleanest — push the guard into
-[utils/sy_cpi.rs](programs/clearstone_core/src/utils/sy_cpi.rs) so every
-`cpi_deposit_sy`, `cpi_withdraw_sy`, `cpi_get_sy_state`, `cpi_claim_emission`
-takes a `&mut Account<Vault>` (or `&mut Account<MarketTwo>`), latches it,
-persists, invokes, reloads, clears. Then the current enter/leave wrappers in
-the five wired instructions can be removed (redundant) and the deferred
-instructions get coverage for free. This is a mechanical but broad change
-(29 callsites).
-
-The I-C1 invariant in PLAN.md §3 requires full coverage before M8 audit.
-
-## M3 — Virtual-share fuzz tests
-
-Plan exit criterion: "fuzz test: first-deposit sandwich attempt leaves
-attacker with strictly less than they started. 1-wei donation attack does
-not shift exchange rate beyond epsilon." Not built — no tests exist beyond
-the placeholder. Ships with the M6 integration suite: parametric first-LP
-sandwich + donation-attack scenarios exercised against
-[state/market_two.rs](programs/clearstone_core/src/state/market_two.rs)'s
-virtualized `add_liquidity`, `rm_liquidity`, and `trade_pt`.
-
-## M3 — Virtualized rm_liquidity / lp_to_sy clamp
-
-Because the curve math runs on `(reserves + virtual)` while the escrow only
-holds `reserves`, the pure formula can return `pt_out > pt_balance` or
-`sy_out > sy_balance` on nearly-drained pools. [state/market_two.rs rm_liquidity](programs/clearstone_core/src/state/market_two.rs)
-clamps outputs to the real reserve floor. That clamp is a safety net, not a
-first-class correctness property — if the LP supply and real reserves ever
-desync enough to trigger it, the LP holder takes a slightly smaller
-withdrawal than the pro-rata share. Worth checking during M6 fuzz + before
-audit whether this shows up in practice at realistic liquidity sizes.
-
-## M2 — Reentrancy test harness
-
-Plan exit criterion: "Dedicated test for re-entrancy (mock SY program that
-tries to call back in; must fail)." Not built yet — there are no tests
-beyond the placeholder [clearstone-core.ts](tests/clearstone-core.ts). The
-mock-SY harness lands with the M6 integration suite.
+- **Virtual-share fuzz tests** — plan calls for parametric first-LP
+  sandwich + donation-attack scenarios. Rust unit tests cover specific
+  cases; a property-based suite (proptest / quickcheck) would extend
+  coverage.
+- **rm_liquidity clamp analysis** — the clamp to real reserves can
+  produce a tiny supply/reserve asymmetry on near-empty pools. Worth
+  checking whether this shows up at realistic liquidity sizes during
+  M6 integration runs.

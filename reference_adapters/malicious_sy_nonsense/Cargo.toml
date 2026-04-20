@@ -1,0 +1,25 @@
+[package]
+name = "malicious_sy_nonsense"
+version = "0.1.0"
+description = "Test-only SY adapter that deliberately returns garbage (zero exchange rate, wrong emissions length) so we can assert the core's validate_sy_state catches it."
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "malicious_sy_nonsense"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["event-cpi"] }
+anchor-spl = { version = "0.31.1" }
+precise_number = { path = "../../libraries/precise_number" }
+sy_common = { path = "../../libraries/sy_common" }
+amount_value = { path = "../../libraries/amount_value" }
+getrandom = { version = "=0.2.10", features = ["custom"] }

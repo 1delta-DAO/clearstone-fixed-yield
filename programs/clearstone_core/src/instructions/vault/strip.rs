@@ -1,7 +1,6 @@
 use super::common::update_vault_yield;
 use crate::{
     error::ExponentCoreError,
-    reentrancy,
     state::*,
     util::{now, token_transfer},
     utils::{sy_cpi::validate_sy_state, *},
@@ -153,17 +152,12 @@ pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, Strip<'info>>,
     amount: u64,
 ) -> Result<StripEvent> {
-    // Reentrancy: latch the vault before touching the untrusted SY program.
-    reentrancy::enter(&mut **ctx.accounts.vault)?;
-
     // First, transfer SY tokens to account owned by vault
     token_transfer(ctx.accounts.transfer_sy_context(), amount)?;
 
-    // Flush guard=true to the account data so a re-entrant CPI sees it.
-    reentrancy::persist(&ctx.accounts.vault)?;
-
-    // Then transfer SY tokens into sy_program (untrusted CPI).
+    // SY CPI — guard applied inside do_deposit_sy via vault's guard byte.
     let sy_state = do_deposit_sy(
+        &ctx.accounts.vault.to_account_info(),
         amount,
         &ctx.accounts.address_lookup_table,
         &ctx.accounts.vault.cpi_accounts,
@@ -173,7 +167,7 @@ pub fn handler<'info>(
         &[&ctx.accounts.vault.signer_seeds()],
     )?;
 
-    // Re-read vault state after the untrusted CPI.
+    // Re-read vault state after the CPI (guard byte was toggled by latch/unlatch).
     ctx.accounts.vault.reload()?;
 
     // Sanitize the SY program's return.
@@ -215,10 +209,6 @@ pub fn handler<'info>(
     };
 
     emit_cpi!(event);
-
-    // Release the reentrancy latch. Anchor's end-of-ix serialization flushes
-    // the cleared value back to the account.
-    reentrancy::leave(&mut **ctx.accounts.vault);
 
     Ok(event)
 }

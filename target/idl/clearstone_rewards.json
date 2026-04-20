@@ -1,0 +1,509 @@
+{
+  "address": "7ddrynBQiCNjxejxRwxvSbDb56k8F8Yp4KwYgfiaHX8g",
+  "metadata": {
+    "name": "clearstone_rewards",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Clearstone periphery: LP staking + farm emissions router. Separate from core — plugs in via SPL transfers."
+  },
+  "instructions": [
+    {
+      "name": "add_farm",
+      "docs": [
+        "Curator adds a new emission bucket: (reward_mint, rate per second,",
+        "expiry timestamp). Seed tokens must be transferred separately into",
+        "the program-owned emission escrow (see refill_farm)."
+      ],
+      "discriminator": [
+        107,
+        69,
+        222,
+        47,
+        134,
+        55,
+        234,
+        78
+      ],
+      "accounts": [
+        {
+          "name": "curator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "farm_state",
+          "writable": true
+        },
+        {
+          "name": "reward_mint"
+        },
+        {
+          "name": "reward_escrow",
+          "docs": [
+            "Reward escrow — ATA owned by farm_state PDA for this reward mint.",
+            "Init_if_needed so curators can rewire a previously-existing ATA.",
+            "The claim ixn signs transfers out of this with the farm_state seed."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "associated_token_program"
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "token_rate",
+          "type": "u64"
+        },
+        {
+          "name": "expiry_timestamp",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "claim_farm_emission",
+      "docs": [
+        "Move accrued rewards for the given reward mint from the",
+        "farm_state-owned ATA to the user's destination account.",
+        "",
+        "Semantics:",
+        "- Runs update_indexes + settle_user so all buckets are current.",
+        "- Finds the matching farm entry by mint.",
+        "- Pays out `per_farm.claimable` for that farm.",
+        "- Zeros the claimable slot.",
+        "",
+        "Reward escrow authority is `farm_state` (set at add_farm via an",
+        "ATA constraint) so the transfer is program-signed with farm_state",
+        "seeds. If the escrow is short (i.e., nobody refilled), the",
+        "transfer fails; accrual state remains untouched because the",
+        "mutation happens before the transfer."
+      ],
+      "discriminator": [
+        95,
+        76,
+        227,
+        108,
+        157,
+        11,
+        183,
+        145
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true
+        },
+        {
+          "name": "farm_state",
+          "writable": true
+        },
+        {
+          "name": "position",
+          "writable": true
+        },
+        {
+          "name": "reward_mint"
+        },
+        {
+          "name": "reward_escrow",
+          "docs": [
+            "Must be the ATA of farm_state for reward_mint — the same account",
+            "that `add_farm` wrote into the matching `Farm` entry."
+          ],
+          "writable": true
+        },
+        {
+          "name": "reward_dst",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initialize_farm_state",
+      "docs": [
+        "Create a FarmState for a specific market's LP mint. Permissionless —",
+        "anyone can spin up a rewards surface for any market. `curator` is",
+        "who may later call `add_farm` / `refill_farm`."
+      ],
+      "discriminator": [
+        144,
+        6,
+        143,
+        6,
+        125,
+        219,
+        246,
+        114
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "curator"
+        },
+        {
+          "name": "market",
+          "docs": [
+            "so the market<->farm mapping is queryable on-chain."
+          ]
+        },
+        {
+          "name": "lp_mint"
+        },
+        {
+          "name": "farm_state",
+          "writable": true
+        },
+        {
+          "name": "lp_escrow",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program"
+        },
+        {
+          "name": "rent"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "stake_lp",
+      "docs": [
+        "Transfer LP into the program's escrow and bump the staker's balance.",
+        "Before the balance changes, update_indexes brings each farm's",
+        "`accrued_index` up to now."
+      ],
+      "discriminator": [
+        48,
+        168,
+        125,
+        78,
+        82,
+        71,
+        152,
+        117
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "farm_state",
+          "writable": true
+        },
+        {
+          "name": "lp_mint",
+          "writable": true
+        },
+        {
+          "name": "lp_src",
+          "writable": true
+        },
+        {
+          "name": "lp_escrow",
+          "writable": true
+        },
+        {
+          "name": "position",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program"
+        },
+        {
+          "name": "rent"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "unstake_lp",
+      "docs": [
+        "Reverse of stake_lp. Unstake forces an index update and settle so",
+        "the user's claimable buckets are credited before their share drops."
+      ],
+      "discriminator": [
+        114,
+        4,
+        7,
+        206,
+        251,
+        176,
+        233,
+        119
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "farm_state",
+          "writable": true
+        },
+        {
+          "name": "lp_mint",
+          "writable": true
+        },
+        {
+          "name": "lp_dst",
+          "writable": true
+        },
+        {
+          "name": "lp_escrow",
+          "writable": true
+        },
+        {
+          "name": "position",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "FarmState",
+      "discriminator": [
+        198,
+        102,
+        216,
+        74,
+        63,
+        66,
+        163,
+        190
+      ]
+    },
+    {
+      "name": "StakePosition",
+      "discriminator": [
+        78,
+        165,
+        30,
+        111,
+        171,
+        125,
+        11,
+        220
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Unauthorized"
+    },
+    {
+      "code": 6001,
+      "name": "FarmAlreadyExists",
+      "msg": "Farm already exists for this reward mint"
+    },
+    {
+      "code": 6002,
+      "name": "ZeroAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6003,
+      "name": "InsufficientStake",
+      "msg": "Insufficient stake"
+    },
+    {
+      "code": 6004,
+      "name": "Overflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6005,
+      "name": "NotYetImplemented",
+      "msg": "Not yet implemented"
+    },
+    {
+      "code": 6006,
+      "name": "FarmNotFound",
+      "msg": "Farm not found for the given reward mint"
+    }
+  ],
+  "types": [
+    {
+      "name": "Farm",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "reward_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "reward_escrow",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_rate",
+            "type": "u64"
+          },
+          {
+            "name": "expiry_timestamp",
+            "type": "u32"
+          },
+          {
+            "name": "accrued_index",
+            "type": {
+              "defined": {
+                "name": "Number"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "FarmState",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "curator",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "lp_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "lp_escrow",
+            "type": "pubkey"
+          },
+          {
+            "name": "total_staked",
+            "type": "u64"
+          },
+          {
+            "name": "last_update_ts",
+            "type": "u32"
+          },
+          {
+            "name": "farms",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "Farm"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Number",
+      "docs": [
+        "High precision number, stored as 4 u64 words in little endian"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "array": [
+              "u64",
+              4
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "PerFarmTracker",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "last_seen_index",
+            "type": {
+              "defined": {
+                "name": "Number"
+              }
+            }
+          },
+          {
+            "name": "claimable",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "StakePosition",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "farm_state",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "staked_amount",
+            "type": "u64"
+          },
+          {
+            "name": "per_farm",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "PerFarmTracker"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

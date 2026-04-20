@@ -180,7 +180,16 @@ pub fn handler<'info>(
     ctx.accounts.do_transfers_in(r.pt_in, r.sy_in)?;
     ctx.accounts.do_mint_lp(r.lp_out)?;
 
+    // Flush market state before the guarded CPI.
+    {
+        let market_info = ctx.accounts.market.to_account_info();
+        let mut data = market_info.try_borrow_mut_data()?;
+        let mut writer: &mut [u8] = &mut data;
+        ctx.accounts.market.try_serialize(&mut writer)?;
+    }
+
     do_deposit_sy(
+        &ctx.accounts.market.to_account_info(),
         r.sy_in,
         &ctx.accounts.address_lookup_table,
         &ctx.accounts.market.cpi_accounts,
@@ -189,6 +198,7 @@ pub fn handler<'info>(
         ctx.accounts.sy_program.key(),
         &[&ctx.accounts.market.signer_seeds()],
     )?;
+    ctx.accounts.market.reload()?;
 
     ctx.accounts.verify_lp_supply()?;
 

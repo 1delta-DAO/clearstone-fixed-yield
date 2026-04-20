@@ -1,0 +1,23 @@
+[package]
+name = "clearstone_curator"
+version = "0.1.0"
+description = "Clearstone periphery: MetaMorpho-style vault that routes base deposits across a curator-selected set of core markets."
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "clearstone_curator"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["event-cpi", "init-if-needed"] }
+anchor-spl = { version = "0.31.1" }
+precise_number = { path = "../../libraries/precise_number" }
+getrandom = { version = "=0.2.10", features = ["custom"] }

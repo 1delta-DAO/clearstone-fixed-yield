@@ -1,27 +1,85 @@
-# Exponent Core – Yield Stripping and Swap Program
+# Clearstone Fixed Yield — Permissionless PT/YT Core
 
-This repository contains the core program for the Exponent protocol, a yield stripping and interest swap exchange on Solana. For a high level overview of how Exponent works, see its [documentation](https://docs.exponent.finance).
+A permissionless fork of [Exponent Core](https://github.com/exponent-finance).
+Anyone can create a vault and market for any standardized-yield (SY)
+program. The core is deliberately small, frozen, and invariant-driven;
+curation, emissions, and wrappers live in periphery programs.
 
-## Deployment
+Working title "Exponent Blue" in [PLAN.md](PLAN.md) is superseded —
+this repo ships as **Clearstone**.
 
-- Program ID (Mainnet): `ExponentnaRg3CQbW6dqQNZKXp7gtZ9DGMp1cwC4HAS7`
-- On-chain Program Hash: `e584d8035cbe411f6dc3a24bdcd32a29e4bf953569c1c4971b23c03793a16b3c`
-- Deployed Commit Hash: `7011d1b46b542611543f8ed21836b165f2ab75ac`
+## Layout
 
-Solana deployments can be verified using the [Ellipsis Labs verifiable build tool](https://github.com/Ellipsis-Labs/solana-verifiable-build), based on the `solanafoundation/solana-verifiable-build:2.3.8` base image.
+```
+programs/
+  clearstone_core/         the trusted core. permissionless init,
+                           ~21 instructions, curator-gated modify paths.
 
-## Security & Bug bounty
+reference_adapters/
+  generic_exchange_rate_sy/ reference SY adapter — SPL mint + pokable
+                            exchange rate with ATH monotonicity enforced.
+  malicious_sy_nonsense/    test-only mock that returns garbage SyState
+                            so we can exercise validate_sy_state.
 
-Exponent Core has undergone various independent audits by leading cybersecurity and blockchain smart contract auditing firms:
+periphery/
+  clearstone_router/       base-asset UX wrappers (base ↔ SY via
+                           adapter CPIs around core primitives).
+  clearstone_rewards/      LP staking + farm emissions.
+  clearstone_curator/      MetaMorpho-analog super-vault.
 
-- OtterSec: [View Full Report](https://github.com/exponent-finance/exponent-audits/blob/main/exponent_core_admin_ottersec_audit.pdf)
-- Offside Labs: [View Full Report](https://github.com/exponent-finance/exponent-audits/blob/main/Exponent-ExponentCore-Oct-2024-OffsideLabs.pdf)
-- Certora: [View Full Report](https://github.com/exponent-finance/exponent-audits/blob/main/Exponent_Core_Certora_Audit_June_2025.pdf)
+libraries/                 inherited from upstream Exponent.
+tests/                     fixtures + integration suite.
+```
 
-This repository is subject to the Exponent bug bounty program, per the terms defined [here](https://docs.exponent.finance/security/bug-bounty).
+## Read order
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — system diagram + per-op
+  data flows.
+- **[CURATOR_GUIDE.md](CURATOR_GUIDE.md)** — step-by-step for
+  creating and running a market.
+- **[INVARIANTS.md](INVARIANTS.md)** — formal safety properties + code
+  mapping.
+- **[INTERFACE.md](INTERFACE.md)** — public instruction catalogue with
+  discriminators and account shapes.
+- **[AUDIT_SCOPE.md](AUDIT_SCOPE.md)** — what auditors need.
+- **[FOLLOWUPS.md](FOLLOWUPS.md)** — deviations from the plan with
+  closure notes.
+- **[PLAN.md](PLAN.md)** — original design doc and milestone plan.
+
+## Program IDs (localnet)
+
+- `clearstone_core`: `EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC`
+- `generic_exchange_rate_sy`: `DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6`
+- `malicious_sy_nonsense` (tests only): `jEsn9RSpNmmG8tFTo6TjYM8WxVyP9p6sBVGLbHZxZJs`
+- `clearstone_rewards`: `7ddrynBQiCNjxejxRwxvSbDb56k8F8Yp4KwYgfiaHX8g`
+- `clearstone_curator`: `831zw8r2fGwRB1QpuRU3gZHZBFYYHBHeG7RbKUz9ssGm`
+- `clearstone_router`: `DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW`
+
+No mainnet deployment yet.
+
+## Build & test
+
+```
+cargo check --workspace
+cargo test --package clearstone_core --lib
+```
+
+End-to-end tests require `anchor build` + a local validator; the
+TypeScript suite in [tests/](tests/) is a skeleton, not a runnable
+suite. See AUDIT_SCOPE.md and FOLLOWUPS.md for the state of that work.
+
+## Security & bug bounty
+
+**Clearstone has not been audited.** Upstream Exponent audits (Ottersec,
+Offside Labs, Certora) cover earlier versions of `libraries/time_curve`,
+`libraries/precise_number`, and strip/merge state semantics — but the
+permissioning, reentrancy hardening, and virtualized reserves introduced
+by Clearstone are new code and unaudited.
+
+- Reports: `security@1delta.io` (per `security_txt!` in the program).
 
 ## License
 
-The primary license for Exponent Core is the Business Source License 1.1 (`BUSL-1.1`), see [LICENSE](./LICENSE) for full terms.
-
-Software distributed under this license is provided "AS IS", without warranty of any kind. By interacting with this program, users acknowledge and accept full personal responsibility for any consequences, regardless of their nature. This includes both potential risks inherent to the smart contract, also referred to as program, as well as any losses resulting from user errors or misjudgment.
+BUSL-1.1, inherited from Exponent Core. See [LICENSE](./LICENSE). This
+fork carries attribution to upstream Exponent per §14 of [PLAN.md](PLAN.md).
+Software distributed "AS IS", without warranty of any kind.

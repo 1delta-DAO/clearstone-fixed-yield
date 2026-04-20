@@ -376,7 +376,17 @@ pub fn handler<'info>(
     // Create an account for the Market robot with the SY Program
     cpi_init_sy_personal_account(ctx.accounts.sy_program.key(), ctx.remaining_accounts)?;
 
+    // Flush market state (just written above via set_inner) before the
+    // guarded CPI so the latch byte can be read on-chain.
+    {
+        let market_info = ctx.accounts.market.to_account_info();
+        let mut data = market_info.try_borrow_mut_data()?;
+        let mut writer: &mut [u8] = &mut data;
+        ctx.accounts.market.try_serialize(&mut writer)?;
+    }
+
     do_deposit_sy(
+        &ctx.accounts.market.to_account_info(),
         sy_init,
         &ctx.accounts.address_lookup_table,
         &ctx.accounts.market.cpi_accounts,
@@ -385,6 +395,7 @@ pub fn handler<'info>(
         ctx.accounts.sy_program.key(),
         &[&ctx.accounts.market.signer_seeds()],
     )?;
+    ctx.accounts.market.reload()?;
 
     Ok(())
 }

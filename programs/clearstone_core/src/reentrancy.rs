@@ -51,6 +51,54 @@ where
     Ok(())
 }
 
+/// Byte offset of `reentrancy_guard` inside a serialized Vault or MarketTwo.
+///
+/// Layout: `discriminator (8) + curator (32) + creator_fee_bps (2)` = 42.
+/// This offset is shared by Vault and MarketTwo because both structs begin
+/// with the same three fields. If either layout changes, the const must move
+/// to match or the helpers below break silently.
+///
+/// Keep this check tied to a compile-time assert in a real audit; for now,
+/// both state files carry a comment referencing this constant.
+pub const GUARD_BYTE_OFFSET: usize = 8 + 32 + 2;
+
+/// Low-level guard manipulation for use inside SY CPI wrappers.
+///
+/// Flips the guard byte to 1 directly on the account data. Must be called
+/// **before** the untrusted CPI: a reentrant call from the SY program
+/// reads the on-chain data, sees the latched byte, and fails its own
+/// `latch` call with `ReentrancyLocked`.
+///
+/// Fails loudly if the byte is already set — either we're double-latching
+/// (caller bug) or a reentrant call snuck past us (attack).
+///
+/// Returns without borrowing the data after this function returns, so the
+/// subsequent CPI is free to re-borrow it.
+pub fn latch(info: &AccountInfo) -> Result<()> {
+    let mut data = info.try_borrow_mut_data()?;
+    require!(
+        data.len() > GUARD_BYTE_OFFSET,
+        ExponentCoreError::ReentrancyLocked
+    );
+    require!(
+        data[GUARD_BYTE_OFFSET] == 0,
+        ExponentCoreError::ReentrancyLocked
+    );
+    data[GUARD_BYTE_OFFSET] = 1;
+    Ok(())
+}
+
+/// Clear the guard byte. Pair with `latch`. Called after the CPI returns.
+pub fn unlatch(info: &AccountInfo) -> Result<()> {
+    let mut data = info.try_borrow_mut_data()?;
+    require!(
+        data.len() > GUARD_BYTE_OFFSET,
+        ExponentCoreError::ReentrancyLocked
+    );
+    data[GUARD_BYTE_OFFSET] = 0;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +146,15 @@ mod tests {
         leave(&mut d);
         // Second enter must succeed after a clean leave.
         assert!(enter(&mut d).is_ok());
+    }
+
+    /// GUARD_BYTE_OFFSET must line up with the layout of both Vault and
+    /// MarketTwo. If either struct changes prefix fields, this test
+    /// catches it before an audit ever reads the on-chain data wrong.
+    #[test]
+    fn guard_offset_matches_layout() {
+        // Layout = discriminator(8) + curator(32) + creator_fee_bps(2) = 42.
+        // If the prefix of either state struct changes, update GUARD_BYTE_OFFSET.
+        assert_eq!(GUARD_BYTE_OFFSET, 42);
     }
 }

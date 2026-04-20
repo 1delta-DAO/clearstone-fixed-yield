@@ -815,6 +815,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "clearstone_curator"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "getrandom 0.2.10",
+ "precise_number",
+]
+
+[[package]]
+name = "clearstone_rewards"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "getrandom 0.2.10",
+ "precise_number",
+]
+
+[[package]]
+name = "clearstone_router"
+version = "0.1.0"
+dependencies = [
+ "amount_value",
+ "anchor-lang",
+ "anchor-spl",
+ "clearstone_core",
+ "generic_exchange_rate_sy",
+ "getrandom 0.2.10",
+]
+
+[[package]]
 name = "combine"
 version = "3.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1810,6 +1842,18 @@ name = "log"
 version = "0.4.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
+
+[[package]]
+name = "malicious_sy_nonsense"
+version = "0.1.0"
+dependencies = [
+ "amount_value",
+ "anchor-lang",
+ "anchor-spl",
+ "getrandom 0.2.10",
+ "precise_number",
+ "sy_common",
+]
 
 [[package]]
 name = "memchr"

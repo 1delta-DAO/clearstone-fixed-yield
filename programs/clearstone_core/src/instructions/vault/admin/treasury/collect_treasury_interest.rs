@@ -94,11 +94,13 @@ pub fn handler(
 
     cpi_withdraw_sy(
         ctx.accounts.sy_program.key(),
+        &ctx.accounts.vault.to_account_info(),
         amount_to_send,
         ctx.remaining_accounts,
         to_account_metas(&ctx.accounts.vault.cpi_accounts.withdraw_sy, &lookup_table),
         &[&ctx.accounts.vault.signer_seeds()],
     )?;
+    ctx.accounts.vault.reload()?;
 
     ctx.accounts.transfer_sy(amount_to_send)?;
 

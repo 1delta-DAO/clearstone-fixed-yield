@@ -1,0 +1,431 @@
+{
+  "address": "831zw8r2fGwRB1QpuRU3gZHZBFYYHBHeG7RbKUz9ssGm",
+  "metadata": {
+    "name": "clearstone_curator",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Clearstone periphery: MetaMorpho-style vault that routes base deposits across a curator-selected set of core markets."
+  },
+  "instructions": [
+    {
+      "name": "deposit",
+      "docs": [
+        "User deposits `amount_base`, receives shares. Pro-rata against",
+        "(total_assets + VIRTUAL_ASSETS, total_shares + VIRTUAL_SHARES) to",
+        "preserve the Blue-style anti-inflation property on shares too.",
+        "",
+        "TODO(deploys-a-share-mint): this scaffold stores share balances on",
+        "a `UserPosition` PDA. A cleaner future version mints an SPL share",
+        "token so positions are composable with other protocols."
+      ],
+      "discriminator": [
+        242,
+        35,
+        198,
+        137,
+        82,
+        225,
+        242,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "base_mint",
+          "writable": true
+        },
+        {
+          "name": "base_src",
+          "writable": true
+        },
+        {
+          "name": "base_escrow",
+          "writable": true
+        },
+        {
+          "name": "position",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program"
+        },
+        {
+          "name": "rent"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_base",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize_vault",
+      "docs": [
+        "Stand up a new CuratorVault over `base_mint`. Anyone can call this;",
+        "`curator` is the key that can later modify the market whitelist and",
+        "trigger rebalances."
+      ],
+      "discriminator": [
+        48,
+        191,
+        163,
+        44,
+        71,
+        129,
+        63,
+        164
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "curator"
+        },
+        {
+          "name": "base_mint"
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "base_escrow",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program"
+        },
+        {
+          "name": "rent"
+        }
+      ],
+      "args": [
+        {
+          "name": "fee_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "rebalance",
+      "discriminator": [
+        108,
+        158,
+        77,
+        9,
+        210,
+        52,
+        88,
+        62
+      ],
+      "accounts": [
+        {
+          "name": "curator",
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "set_allocations",
+      "docs": [
+        "Curator updates the target allocation weights. Does NOT move funds",
+        "immediately — a separate `rebalance` (also TODO) actually moves",
+        "base between the core markets' vaults."
+      ],
+      "discriminator": [
+        66,
+        88,
+        197,
+        213,
+        234,
+        204,
+        219,
+        244
+      ],
+      "accounts": [
+        {
+          "name": "curator",
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "allocations",
+          "type": {
+            "vec": {
+              "defined": {
+                "name": "Allocation"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "withdraw",
+      "docs": [
+        "User burns `shares` and receives pro-rata base from escrow.",
+        "",
+        "Fast path only — pays out exclusively from `base_escrow`. If the",
+        "escrow is short because most base is deployed into core markets",
+        "(via `rebalance` — TODO), this will fail and the user must wait",
+        "for the curator to rebalance liquidity back in, or a future",
+        "`withdraw_with_pull` path has to land."
+      ],
+      "discriminator": [
+        183,
+        18,
+        70,
+        156,
+        148,
+        109,
+        161,
+        34
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "base_mint",
+          "writable": true
+        },
+        {
+          "name": "base_dst",
+          "writable": true
+        },
+        {
+          "name": "base_escrow",
+          "writable": true
+        },
+        {
+          "name": "position",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "shares",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "CuratorVault",
+      "discriminator": [
+        105,
+        211,
+        15,
+        118,
+        12,
+        32,
+        121,
+        71
+      ]
+    },
+    {
+      "name": "UserPosition",
+      "discriminator": [
+        251,
+        248,
+        209,
+        245,
+        83,
+        234,
+        17,
+        27
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Unauthorized"
+    },
+    {
+      "code": 6001,
+      "name": "ZeroAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6002,
+      "name": "FeeTooHigh",
+      "msg": "Performance fee exceeds 20% cap"
+    },
+    {
+      "code": 6003,
+      "name": "WeightsExceedFull",
+      "msg": "Allocation weights exceed 100%"
+    },
+    {
+      "code": 6004,
+      "name": "Overflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6005,
+      "name": "NotYetImplemented",
+      "msg": "Not yet implemented"
+    },
+    {
+      "code": 6006,
+      "name": "InsufficientShares",
+      "msg": "Position has fewer shares than requested"
+    },
+    {
+      "code": 6007,
+      "name": "InsufficientAssets",
+      "msg": "Vault escrow has insufficient base liquid; curator must rebalance"
+    }
+  ],
+  "types": [
+    {
+      "name": "Allocation",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "docs": [
+              "Target market in clearstone_core."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "weight_bps",
+            "docs": [
+              "Target weight in bps of total_assets. Sum of all weights <= 10_000."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "cap_base",
+            "docs": [
+              "Hard cap on how much base this allocation will ever hold (risk limit)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "deployed_base",
+            "docs": [
+              "Tracking: how much of total_assets is currently deployed here."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CuratorVault",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "curator",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_escrow",
+            "type": "pubkey"
+          },
+          {
+            "name": "total_assets",
+            "docs": [
+              "Accounting totals. These track base tokens held by the curator —",
+              "which may be split between `base_escrow` (idle) and the underlying",
+              "core markets (deployed). `rebalance` keeps them reconciled."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "total_shares",
+            "type": "u64"
+          },
+          {
+            "name": "fee_bps",
+            "docs": [
+              "Performance fee (bps), on realized yield. 2000 bps (20%) max."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "allocations",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "Allocation"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "UserPosition",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "shares",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

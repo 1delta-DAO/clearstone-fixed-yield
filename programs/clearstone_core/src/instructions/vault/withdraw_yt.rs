@@ -100,11 +100,13 @@ impl<'i> WithdrawYt<'i> {
 pub fn handler(ctx: Context<WithdrawYt>, amount: u64) -> Result<WithdrawYtEventV2> {
     let cur_ts = now();
     let sy_state = do_get_sy_state(
+        &ctx.accounts.vault.to_account_info(),
         &ctx.accounts.address_lookup_table.to_account_info(),
         &ctx.accounts.vault.cpi_accounts,
         ctx.remaining_accounts,
         ctx.accounts.sy_program.key(),
     )?;
+    ctx.accounts.vault.reload()?;
 
     handle_withdraw_yt(
         &mut ctx.accounts.vault,

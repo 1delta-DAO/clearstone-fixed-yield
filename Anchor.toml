@@ -1,6 +1,16 @@
 [toolchain]
 anchor_version = "0.31.1"
 
+[workspace]
+members = [
+    "programs/clearstone_core",
+    "reference_adapters/generic_exchange_rate_sy",
+    "reference_adapters/malicious_sy_nonsense",
+    "periphery/clearstone_rewards",
+    "periphery/clearstone_curator",
+    "periphery/clearstone_router",
+]
+
 [features]
 resolution = false
 skip-lint = false
@@ -8,6 +18,10 @@ skip-lint = false
 [programs.localnet]
 clearstone_core = "EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC"
 generic_exchange_rate_sy = "DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6"
+malicious_sy_nonsense = "jEsn9RSpNmmG8tFTo6TjYM8WxVyP9p6sBVGLbHZxZJs"
+clearstone_rewards = "7ddrynBQiCNjxejxRwxvSbDb56k8F8Yp4KwYgfiaHX8g"
+clearstone_curator = "831zw8r2fGwRB1QpuRU3gZHZBFYYHBHeG7RbKUz9ssGm"
+clearstone_router = "DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW"
 
 [registry]
 url = "https://api.apr.dev"

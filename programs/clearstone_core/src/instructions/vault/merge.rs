@@ -1,7 +1,6 @@
 use super::common::update_vault_yield;
 use crate::{
     error::ExponentCoreError,
-    reentrancy,
     state::*,
     util::{now, token_transfer},
     utils::{do_get_sy_state, do_withdraw_sy, sy_cpi::validate_sy_state},
@@ -151,16 +150,11 @@ pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, Merge<'info>>,
     amount_py: u64,
 ) -> Result<MergeEvent> {
-    // Reentrancy: latch before any untrusted SY CPI.
-    reentrancy::enter(&mut **ctx.accounts.vault)?;
-
     let current_unix_timestamp = now();
 
-    // Flush latch to disk before the first untrusted CPI.
-    reentrancy::persist(&ctx.accounts.vault)?;
-
-    // get the latest exchange rate for SY using the CPI interface & return data
+    // Guarded SY CPI: latch is inside do_get_sy_state.
     let sy_state = do_get_sy_state(
+        &ctx.accounts.vault.to_account_info(),
         &ctx.accounts.address_lookup_table.to_account_info(),
         &ctx.accounts.vault.cpi_accounts,
         ctx.remaining_accounts,
@@ -177,10 +171,18 @@ pub fn handler<'info>(
         amount_py,
     )?;
 
-    // Persist state updates before the second CPI.
-    reentrancy::persist(&ctx.accounts.vault)?;
+    // Anchor serializes the Account<Vault> back to disk at end-of-ix;
+    // we manually flush here so the next SY CPI sees the post-handle_merge
+    // state. The guard byte is untouched — do_withdraw_sy manages it.
+    {
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let mut data = vault_info.try_borrow_mut_data()?;
+        let mut writer: &mut [u8] = &mut data;
+        ctx.accounts.vault.try_serialize(&mut writer)?;
+    }
 
     let sy_state_withdraw = do_withdraw_sy(
+        &ctx.accounts.vault.to_account_info(),
         amount_sy,
         &ctx.accounts.address_lookup_table,
         &ctx.accounts.vault.cpi_accounts,
@@ -222,8 +224,6 @@ pub fn handler<'info>(
     };
 
     emit_cpi!(event);
-
-    reentrancy::leave(&mut **ctx.accounts.vault);
 
     Ok(event)
 }

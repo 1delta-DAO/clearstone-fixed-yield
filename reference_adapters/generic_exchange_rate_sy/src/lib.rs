@@ -262,12 +262,20 @@ pub mod generic_exchange_rate_sy {
 
     /// Authority-only: overwrite the stored exchange rate.
     /// Stand-in for a real oracle read.
+    ///
+    /// Enforces ATH monotonicity (I-V3): the rate may only increase. This
+    /// prevents a compromised authority from dropping the rate to strip
+    /// value from PT/YT holders on any vault wired to this SY market.
+    /// A real oracle-backed adapter would replace the manual `new_rate`
+    /// input with an oracle read but keep the same floor check.
     #[instruction(discriminator = [9])]
     pub fn poke_exchange_rate(
         ctx: Context<PokeExchangeRate>,
         new_rate: Number,
     ) -> Result<()> {
         require!(new_rate > Number::ZERO, AdapterError::InvalidExchangeRate);
+        let current = ctx.accounts.sy_market.exchange_rate;
+        require!(new_rate >= current, AdapterError::ExchangeRateRegression);
         ctx.accounts.sy_market.exchange_rate = new_rate;
         Ok(())
     }
@@ -536,6 +544,8 @@ pub struct GetPosition<'info> {
 pub enum AdapterError {
     #[msg("Invalid exchange rate (must be > 0)")]
     InvalidExchangeRate,
+    #[msg("Exchange rate cannot regress below previous value")]
+    ExchangeRateRegression,
     #[msg("Position balance overflow")]
     Overflow,
     #[msg("Position balance underflow")]

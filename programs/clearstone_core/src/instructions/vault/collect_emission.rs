@@ -1,6 +1,6 @@
 use crate::{
     cpi_common::to_account_metas, error::ExponentCoreError,
-    instructions::util::deserialize_lookup_table, reentrancy, util::token_transfer,
+    instructions::util::deserialize_lookup_table, util::token_transfer,
     utils::cpi_claim_emission, Vault, YieldTokenPosition, YieldTokenTracker,
     STATUS_CAN_COLLECT_EMISSIONS,
 };
@@ -92,17 +92,14 @@ pub fn handler(
     index: u16,
     amount: Amount,
 ) -> Result<CollectEmissionEventV2> {
-    reentrancy::enter(&mut *ctx.accounts.vault)?;
-
     let lookup_table = deserialize_lookup_table(&ctx.accounts.address_lookup_table);
     let signer_seeds = &[&ctx.accounts.vault.signer_seeds()[..]];
 
     let amount_to_send = amount.to_u64(ctx.accounts.position.emissions[index as usize].staged)?;
 
-    reentrancy::persist(&ctx.accounts.vault)?;
-
     cpi_claim_emission(
         ctx.accounts.sy_program.key(),
+        &ctx.accounts.vault.to_account_info(),
         amount_to_send,
         ctx.remaining_accounts,
         to_account_metas(
@@ -147,8 +144,6 @@ pub fn handler(
     };
 
     emit_cpi!(event);
-
-    reentrancy::leave(&mut *ctx.accounts.vault);
 
     Ok(event)
 }

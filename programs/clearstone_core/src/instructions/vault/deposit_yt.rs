@@ -103,11 +103,13 @@ pub fn handler(ctx: Context<DepositYt>, amount: u64) -> Result<DepositYtEventV2>
     let current_unix_timestamp = now();
 
     let sy_state = do_get_sy_state(
+        &ctx.accounts.vault.to_account_info(),
         &ctx.accounts.address_lookup_table.to_account_info(),
         &ctx.accounts.vault.cpi_accounts,
         ctx.remaining_accounts,
         ctx.accounts.sy_program.key(),
     )?;
+    ctx.accounts.vault.reload()?;
 
     handle_deposit_yt(
         &mut ctx.accounts.vault,

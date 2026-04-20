@@ -94,6 +94,7 @@ pub fn handler(
 
     cpi_claim_emission(
         ctx.accounts.sy_program.key(),
+        &ctx.accounts.vault.to_account_info(),
         amount_to_send,
         ctx.remaining_accounts,
         to_account_metas(
@@ -102,6 +103,7 @@ pub fn handler(
         ),
         signer_seeds,
     )?;
+    ctx.accounts.vault.reload()?;
 
     ctx.accounts.transfer_emission(amount_to_send)?;
 

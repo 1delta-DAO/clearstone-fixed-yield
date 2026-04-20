@@ -1,0 +1,30 @@
+[package]
+name = "clearstone_router"
+version = "0.1.0"
+description = "Clearstone periphery router: base-asset UX for core. Wraps base↔SY mint/redeem around clearstone_core primitives so users never handle raw SY."
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "clearstone_router"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = [
+    "anchor-lang/idl-build",
+    "anchor-spl/idl-build",
+    "clearstone_core/idl-build",
+    "generic_exchange_rate_sy/idl-build",
+]
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["event-cpi"] }
+anchor-spl = { version = "0.31.1" }
+clearstone_core = { path = "../../programs/clearstone_core", features = ["cpi"] }
+generic_exchange_rate_sy = { path = "../../reference_adapters/generic_exchange_rate_sy", features = ["cpi"] }
+amount_value = { path = "../../libraries/amount_value" }
+getrandom = { version = "=0.2.10", features = ["custom"] }

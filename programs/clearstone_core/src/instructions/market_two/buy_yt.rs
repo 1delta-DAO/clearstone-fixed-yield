@@ -185,8 +185,9 @@ pub fn handler<'i>(
     sy_in: u64,
     yt_out: u64,
 ) -> Result<BuyYtEvent> {
-    // get exchange rate for SY
+    // get exchange rate for SY (guarded via market)
     let sy_exchange_rate = do_get_sy_state(
+        &ctx.accounts.market.to_account_info(),
         &ctx.accounts.address_lookup_table,
         &ctx.accounts.market.cpi_accounts,
         ctx.remaining_accounts,
@@ -194,6 +195,7 @@ pub fn handler<'i>(
     )
     .map(|x| x.exchange_rate)
     .expect("failed to get sy state");
+    ctx.accounts.market.reload()?;
 
     // calculate how much SY must be stripped to get the target YT
     // Use ceiling division
@@ -226,6 +228,7 @@ pub fn handler<'i>(
     // First, withdraw the intended borrowed SY from the market's SY balance in the SY program
     // this does not mutate the market account
     do_withdraw_sy(
+        &ctx.accounts.market.to_account_info(),
         sy_to_borrow,
         &ctx.accounts.address_lookup_table,
         &ctx.accounts.market.cpi_accounts,
@@ -235,6 +238,7 @@ pub fn handler<'i>(
         &[&ctx.accounts.market.signer_seeds()],
     )
     .expect("failed to withdraw sy from CPI");
+    ctx.accounts.market.reload()?;
 
     // borrow the SY to the trader's token account
     ctx.accounts
@@ -296,6 +300,7 @@ pub fn handler<'i>(
 
     // Deposit the SY into the SY program from the Market's escrow account
     do_deposit_sy(
+        &ctx.accounts.market.to_account_info(),
         sy_to_repay,
         &ctx.accounts.address_lookup_table,
         &ctx.accounts.market.cpi_accounts,
@@ -305,6 +310,7 @@ pub fn handler<'i>(
         &[&ctx.accounts.market.signer_seeds()],
     )
     .expect("CPI deposit SY failed");
+    ctx.accounts.market.reload()?;
 
     let event = BuyYtEvent {
         trader: ctx.accounts.trader.key(),

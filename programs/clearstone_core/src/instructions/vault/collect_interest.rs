@@ -1,5 +1,5 @@
 use crate::{
-    error::ExponentCoreError, instructions::vault::common::yield_position_earn, reentrancy,
+    error::ExponentCoreError, instructions::vault::common::yield_position_earn,
     state::*, util::token_transfer, utils::{do_withdraw_sy, sy_cpi::validate_sy_state},
 };
 use amount_value::Amount;
@@ -97,8 +97,6 @@ pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, CollectInterest<'info>>,
     amount: Amount,
 ) -> Result<CollectInterestEventV2> {
-    reentrancy::enter(&mut *ctx.accounts.vault)?;
-
     let amount_sy = amount.to_u64(ctx.accounts.yield_position.interest.staged)?;
 
     ctx.accounts
@@ -116,9 +114,16 @@ pub fn handler<'info>(
     // collect_interest to synchronize vault emission indexes with the current state.
     yield_position_earn(&mut ctx.accounts.vault, &mut ctx.accounts.yield_position);
 
-    reentrancy::persist(&ctx.accounts.vault)?;
+    // Flush post-yield_position_earn state before the guarded CPI.
+    {
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let mut data = vault_info.try_borrow_mut_data()?;
+        let mut writer: &mut [u8] = &mut data;
+        ctx.accounts.vault.try_serialize(&mut writer)?;
+    }
 
     let sy_state = do_withdraw_sy(
+        &ctx.accounts.vault.to_account_info(),
         amount_sy,
         &ctx.accounts.address_lookup_table,
         &ctx.accounts.vault.cpi_accounts,
@@ -156,8 +161,6 @@ pub fn handler<'info>(
     };
 
     emit_cpi!(event);
-
-    reentrancy::leave(&mut *ctx.accounts.vault);
 
     Ok(event)
 }

@@ -1,6 +1,7 @@
 use crate::{
     cpi_common::{to_account_metas, CpiAccounts, CpiInterfaceContext},
     error::ExponentCoreError,
+    reentrancy::{latch, unlatch},
     util::deserialize_lookup_table,
 };
 use amount_value::Amount;
@@ -126,147 +127,143 @@ pub fn cpi_init_sy_personal_account<'i>(
     Ok(())
 }
 
-/// Get SY state from SY program
+/// Every SY-program CPI below follows the same pattern:
+///
+///   latch(guard)   -> write reentrancy_guard = 1 on the caller's
+///                     vault/market account, visible on-chain during the CPI
+///   invoke(...)    -> untrusted call into the SY program; if it re-enters,
+///                     the next latch() sees the set byte and fails closed
+///   unlatch(guard) -> clear the byte after return
+///
+/// This is the consolidated M2 enforcement — every call site gets the
+/// guard automatically. Handlers no longer wrap these; they do still
+/// need to `.reload()` the Account<T> after the CPI to pick up any
+/// side effects from the CPI path.
+
+/// Get SY state from SY program (guarded).
 pub fn cpi_get_sy_state<'i>(
     sy_program: Pubkey,
+    guard: &AccountInfo,
     account_infos: &[AccountInfo<'i>],
     account_metas: Vec<AccountMeta>,
 ) -> Result<SyState> {
     let mut data: Vec<u8> = vec![];
-
     let discriminator = [7];
     data.extend_from_slice(discriminator.as_slice());
 
-    invoke(
-        &Instruction {
-            program_id: sy_program,
-            accounts: account_metas,
-            data,
-        },
-        &account_infos,
-    )?;
+    latch(guard)?;
+    let r = invoke(
+        &Instruction { program_id: sy_program, accounts: account_metas, data },
+        account_infos,
+    );
+    unlatch(guard)?;
+    r?;
 
     let d = get_return_data().unwrap().1;
-
-    let sy_state = SyState::try_from_slice(&d)?;
-
-    Ok(sy_state)
+    Ok(SyState::try_from_slice(&d)?)
 }
 
-/// Deposit SY tokens into SY program
+/// Deposit SY tokens into SY program (guarded).
 pub fn cpi_deposit_sy<'i>(
     sy_program: Pubkey,
+    guard: &AccountInfo,
     amount: u64,
     account_infos: &[AccountInfo<'i>],
     account_metas: Vec<AccountMeta>,
     seeds: &[&[&[u8]]],
 ) -> Result<SyState> {
     let mut data: Vec<u8> = vec![];
-
     let discriminator = [5];
     data.extend_from_slice(discriminator.as_slice());
     data.extend(amount.to_le_bytes());
 
-    invoke_signed(
-        &Instruction {
-            program_id: sy_program,
-            accounts: account_metas,
-            data,
-        },
-        &account_infos,
+    latch(guard)?;
+    let r = invoke_signed(
+        &Instruction { program_id: sy_program, accounts: account_metas, data },
+        account_infos,
         seeds,
-    )?;
+    );
+    unlatch(guard)?;
+    r?;
 
     let d = get_return_data().unwrap().1;
-
-    let sy_state = SyState::try_from_slice(&d)?;
-
-    Ok(sy_state)
+    Ok(SyState::try_from_slice(&d)?)
 }
 
-/// Withdraw SY tokens from the SY program
+/// Withdraw SY tokens from the SY program (guarded).
 pub fn cpi_withdraw_sy<'i>(
     sy_program: Pubkey,
+    guard: &AccountInfo,
     amount: u64,
     account_infos: &[AccountInfo<'i>],
     account_metas: Vec<AccountMeta>,
     seeds: &[&[&[u8]]],
 ) -> Result<SyState> {
     let mut data: Vec<u8> = vec![];
-
     let discriminator = [6];
     data.extend_from_slice(discriminator.as_slice());
     data.extend(amount.to_le_bytes());
 
-    invoke_signed(
-        &Instruction {
-            program_id: sy_program,
-            accounts: account_metas,
-            data,
-        },
-        &account_infos,
+    latch(guard)?;
+    let r = invoke_signed(
+        &Instruction { program_id: sy_program, accounts: account_metas, data },
+        account_infos,
         seeds,
-    )?;
+    );
+    unlatch(guard)?;
+    r?;
 
     let d = get_return_data().unwrap().1;
-
-    let sy_state = SyState::try_from_slice(&d)?;
-
-    Ok(sy_state)
+    Ok(SyState::try_from_slice(&d)?)
 }
 
+/// Claim an SY program emission (guarded).
 pub fn cpi_claim_emission<'i>(
     sy_program: Pubkey,
+    guard: &AccountInfo,
     amount: u64,
     account_infos: &[AccountInfo<'i>],
     account_metas: Vec<AccountMeta>,
     seeds: &[&[&[u8]]],
 ) -> Result<()> {
     let mut data: Vec<u8> = vec![];
-
     let discriminator = [8];
     data.extend_from_slice(discriminator.as_slice());
     Amount::Some(amount).serialize(&mut data)?;
 
-    invoke_signed(
-        &Instruction {
-            program_id: sy_program,
-            accounts: account_metas,
-            data,
-        },
-        &account_infos,
+    latch(guard)?;
+    let r = invoke_signed(
+        &Instruction { program_id: sy_program, accounts: account_metas, data },
+        account_infos,
         seeds,
-    )?;
-
-    Ok(())
+    );
+    unlatch(guard)?;
+    r.map_err(Into::into)
 }
 
+/// Read a personal position from the SY program (guarded).
 pub fn cpi_get_position<'i>(
     sy_program: Pubkey,
+    guard: &AccountInfo,
     account_infos: &[AccountInfo<'i>],
     account_metas: Vec<AccountMeta>,
     seeds: &[&[&[u8]]],
 ) -> Result<PositionState> {
     let mut data: Vec<u8> = vec![];
-
     let discriminator = [10];
     data.extend_from_slice(discriminator.as_slice());
 
-    invoke_signed(
-        &Instruction {
-            program_id: sy_program,
-            accounts: account_metas,
-            data,
-        },
-        &account_infos,
+    latch(guard)?;
+    let r = invoke_signed(
+        &Instruction { program_id: sy_program, accounts: account_metas, data },
+        account_infos,
         seeds,
-    )?;
+    );
+    unlatch(guard)?;
+    r?;
 
     let d = get_return_data().unwrap().1;
-
-    let position = PositionState::try_from_slice(&d)?;
-
-    Ok(position)
+    Ok(PositionState::try_from_slice(&d)?)
 }
 
 pub fn cpi_mint_sy<'i>(
@@ -372,8 +369,10 @@ pub fn sy_to_py_ceil(sy_exchange_rate: Number, amount_sy: u64) -> u64 {
     py.ceil_u64()
 }
 
-/// Helper function for getting SY state
+/// Helper function for getting SY state. `guard` is the vault or market
+/// AccountInfo whose reentrancy_guard byte protects this CPI.
 pub fn do_get_sy_state(
+    guard: &AccountInfo,
     alt: &AccountInfo,
     cpi_accounts: &CpiAccounts,
     rem_accounts: &[AccountInfo],
@@ -381,10 +380,11 @@ pub fn do_get_sy_state(
 ) -> Result<SyState> {
     let t = deserialize_lookup_table(alt);
     let account_metas = to_account_metas(&cpi_accounts.get_sy_state, &t);
-    cpi_get_sy_state(sy_program, rem_accounts, account_metas)
+    cpi_get_sy_state(sy_program, guard, rem_accounts, account_metas)
 }
 
 pub fn do_deposit_sy<'info>(
+    guard: &AccountInfo,
     amount: u64,
     alt: &AccountInfo,
     cpi_accounts: &CpiAccounts,
@@ -396,20 +396,19 @@ pub fn do_deposit_sy<'info>(
     let t = deserialize_lookup_table(alt);
     let account_metas = to_account_metas(&cpi_accounts.deposit_sy, &t);
 
-    // Combine regular_accounts and rem_accounts
     let mut all_accounts = regular_accounts.to_vec();
     all_accounts.extend_from_slice(rem_accounts);
 
-    // Filter out accounts that are not needed for the CPI
     let filtered_accounts: Vec<AccountInfo> = all_accounts
         .into_iter()
         .filter(|account| account_metas.iter().any(|meta| meta.pubkey == *account.key))
         .collect();
 
-    cpi_deposit_sy(sy_program, amount, &filtered_accounts, account_metas, seeds)
+    cpi_deposit_sy(sy_program, guard, amount, &filtered_accounts, account_metas, seeds)
 }
 
 pub fn do_withdraw_sy<'info>(
+    guard: &AccountInfo,
     amount: u64,
     alt: &AccountInfo<'info>,
     cpi_accounts: &CpiAccounts,
@@ -421,20 +420,19 @@ pub fn do_withdraw_sy<'info>(
     let t = deserialize_lookup_table(alt);
     let account_metas = to_account_metas(&cpi_accounts.withdraw_sy, &t);
 
-    // Combine regular_accounts and rem_accounts
     let mut all_accounts = regular_accounts.to_vec();
     all_accounts.extend_from_slice(rem_accounts);
 
-    // Filter out accounts that are not needed for the CPI
     let filtered_accounts: Vec<AccountInfo> = all_accounts
         .into_iter()
         .filter(|account| account_metas.iter().any(|meta| meta.pubkey == *account.key))
         .collect();
 
-    cpi_withdraw_sy(sy_program, amount, &filtered_accounts, account_metas, seeds)
+    cpi_withdraw_sy(sy_program, guard, amount, &filtered_accounts, account_metas, seeds)
 }
 
 pub fn do_get_position_state(
+    guard: &AccountInfo,
     alt: &AccountInfo,
     cpi_accounts: &CpiAccounts,
     rem_accounts: &[AccountInfo],
@@ -443,5 +441,5 @@ pub fn do_get_position_state(
 ) -> Result<PositionState> {
     let t = deserialize_lookup_table(alt);
     let account_metas = to_account_metas(&cpi_accounts.get_position_state, &t);
-    cpi_get_position(sy_program, rem_accounts, account_metas, seeds)
+    cpi_get_position(sy_program, guard, rem_accounts, account_metas, seeds)
 }
