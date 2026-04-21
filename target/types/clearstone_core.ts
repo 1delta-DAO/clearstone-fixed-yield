@@ -816,6 +816,16 @@ export type ClearstoneCore = {
         {
           "name": "maxPySupply",
           "type": "u64"
+        },
+        {
+          "name": "emissionsSeed",
+          "type": {
+            "vec": {
+              "defined": {
+                "name": "emissionSeed"
+              }
+            }
+          }
         }
       ]
     },
@@ -2913,6 +2923,41 @@ export type ClearstoneCore = {
               "The lambo fund"
             ],
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "emissionSeed",
+      "docs": [
+        "Init-time seed record for a `Vault.emissions` entry. Callers supply",
+        "the current SY emission index off-chain (read via a get_sy_state",
+        "before init) so we start accruing from the right point — seeding",
+        "`initial_index = ZERO` would retroactively credit pre-vault",
+        "emissions to the first YT holder."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "tokenAccount",
+            "type": "pubkey"
+          },
+          {
+            "name": "treasuryTokenAccount",
+            "type": "pubkey"
+          },
+          {
+            "name": "initialIndex",
+            "type": {
+              "defined": {
+                "name": "number"
+              }
+            }
+          },
+          {
+            "name": "feeBps",
+            "type": "u16"
           }
         ]
       }

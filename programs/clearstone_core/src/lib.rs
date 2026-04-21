@@ -54,6 +54,7 @@ pub mod clearstone_core {
         curator: Pubkey,
         creator_fee_bps: u16,
         max_py_supply: u64,
+        emissions_seed: Vec<EmissionSeed>,
     ) -> Result<()> {
         initialize_vault::handler(
             ctx,
@@ -69,6 +70,7 @@ pub mod clearstone_core {
             curator,
             creator_fee_bps,
             max_py_supply,
+            emissions_seed,
         )
     }
 

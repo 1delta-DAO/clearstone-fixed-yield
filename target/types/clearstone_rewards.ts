@@ -136,6 +136,79 @@ export type ClearstoneRewards = {
       "args": []
     },
     {
+      "name": "decommissionFarm",
+      "docs": [
+        "Grow a stake position to fit the current farm count.",
+        "",
+        "Stake positions are sized at first-stake for whatever `farms.len()`",
+        "is at that moment. When the curator adds new farms afterwards the",
+        "position is too small to hold the extra per-farm trackers, and",
+        "stake_lp / unstake_lp / claim_farm_emission would panic on",
+        "serialization. This ix lets the owner re-size first; the handler",
+        "body is empty because Anchor's `realloc` attribute does the work",
+        "(and tops up rent from `owner`).",
+        "Curator-only: remove a fully-expired farm entry.",
+        "",
+        "Only callable when `now >= expiry_timestamp` — prevents the",
+        "curator from yanking a live emission stream out from under",
+        "stakers. Any leftover tokens in the reward_escrow ATA are",
+        "swept back to `reward_drain` (curator's destination) before",
+        "the Farm slot is removed from the vec. Shrinks `FarmState` by",
+        "one `Farm` entry — Anchor realloc keeps the account size tight.",
+        "",
+        "Stakers whose `per_farm` vec is longer than the new farm count",
+        "keep their trailing claimable buckets untouched but they're now",
+        "orphaned (no Farm to resolve). The existing `realloc_stake_position`",
+        "ix doesn't shrink; that's a deliberate choice — don't wipe",
+        "user-visible data in a curator-triggered flow."
+      ],
+      "discriminator": [
+        5,
+        210,
+        119,
+        223,
+        235,
+        192,
+        155,
+        123
+      ],
+      "accounts": [
+        {
+          "name": "curator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "farmState",
+          "writable": true
+        },
+        {
+          "name": "rewardMint"
+        },
+        {
+          "name": "rewardEscrow",
+          "docs": [
+            "Farm-state-owned ATA for the reward mint (same as `add_farm`)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "rewardDrain",
+          "docs": [
+            "Destination for any remaining reward tokens in the escrow."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram"
+        },
+        {
+          "name": "systemProgram"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "initializeFarmState",
       "docs": [
         "Create a FarmState for a specific market's LP mint. Permissionless —",
@@ -192,17 +265,6 @@ export type ClearstoneRewards = {
     },
     {
       "name": "reallocStakePosition",
-      "docs": [
-        "Grow a stake position to fit the current farm count.",
-        "",
-        "Stake positions are sized at first-stake for whatever `farms.len()`",
-        "is at that moment. When the curator adds new farms afterwards the",
-        "position is too small to hold the extra per-farm trackers, and",
-        "stake_lp / unstake_lp / claim_farm_emission would panic on",
-        "serialization. This ix lets the owner re-size first; the handler",
-        "body is empty because Anchor's `realloc` attribute does the work",
-        "(and tops up rent from `owner`)."
-      ],
       "discriminator": [
         102,
         40,
@@ -461,6 +523,19 @@ export type ClearstoneRewards = {
       ]
     },
     {
+      "name": "farmDecommissioned",
+      "discriminator": [
+        235,
+        136,
+        121,
+        118,
+        135,
+        71,
+        209,
+        194
+      ]
+    },
+    {
       "name": "farmRefilled",
       "discriminator": [
         95,
@@ -566,6 +641,11 @@ export type ClearstoneRewards = {
       "code": 6007,
       "name": "stalePosition",
       "msg": "Stake position is too small for current farm count; call realloc_stake_position"
+    },
+    {
+      "code": 6008,
+      "name": "farmStillLive",
+      "msg": "Farm is still live; wait until expiry_timestamp before decommissioning"
     }
   ],
   "types": [
@@ -649,6 +729,26 @@ export type ClearstoneRewards = {
           {
             "name": "expiryTimestamp",
             "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "farmDecommissioned",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "farmState",
+            "type": "pubkey"
+          },
+          {
+            "name": "rewardMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "sweptAmount",
+            "type": "u64"
           }
         ]
       }

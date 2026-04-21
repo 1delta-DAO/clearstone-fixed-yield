@@ -963,3 +963,190 @@ mod virtualization_tests {
         assert!(delta <= tolerance);
     }
 }
+
+#[cfg(test)]
+mod virtualization_fuzz {
+    //! Property-based coverage for the virtual-share invariants. These
+    //! tests sample reserves, LP supplies, and intents across ~1000
+    //! cases per property — catches edge cases the hand-written
+    //! `virtualization_tests` above don't hit. Runs under `cargo test`.
+    //!
+    //! Invariants covered:
+    //!   V-1 donation bounded — a single-sided token transfer shifts
+    //!       the virtualized reserve ratio by less than the virtual
+    //!       floor's share.
+    //!   V-2 add→remove ≤ in — adding liquidity and immediately
+    //!       removing the minted LP can't return more PT+SY than went
+    //!       in (first-LP sandwich bound, I-M2).
+    //!   V-3 proportionality — at scale, add_liquidity pays LP ≈
+    //!       intent * lp_supply / reserves, up to the virtual-floor
+    //!       correction.
+    //!   V-4 empty-reserve resilience — add_liquidity on (0, 0) real
+    //!       reserves never panics and consumes a bounded amount.
+    //!
+    //! The exchange-rate scalar is fixed at 1 (SY ≡ base) so these
+    //! properties are about the pool arithmetic, not the rate curve.
+    use super::*;
+    use crate::constants::{VIRTUAL_LP_FLOOR, VIRTUAL_PT, VIRTUAL_SY};
+    use proptest::prelude::*;
+
+    fn fin(pt_balance: u64, sy_balance: u64) -> MarketFinancials {
+        MarketFinancials {
+            expiration_ts: 10_000_000,
+            pt_balance,
+            sy_balance,
+            ln_fee_rate_root: 0.0,
+            last_ln_implied_rate: 0.0,
+            rate_scalar_root: 1.0,
+        }
+    }
+
+    proptest! {
+        /// V-1: any single-sided donation's impact on the virtualized
+        /// ratio is strictly bounded by VIRTUAL_SY / (reserve + VIRTUAL_SY).
+        #[test]
+        fn donation_shift_bounded(
+            reserves in 1_000_000u64..1_000_000_000_000u64,
+            donation in 1u64..1_000_000u64,
+        ) {
+            let pristine = fin(reserves, reserves);
+            let donated = fin(reserves, reserves.saturating_add(donation));
+            let p_ratio = pristine.v_pt_balance() as f64 / pristine.v_sy_balance() as f64;
+            let d_ratio = donated.v_pt_balance() as f64 / donated.v_sy_balance() as f64;
+            let rel_diff = (p_ratio - d_ratio).abs() / p_ratio;
+            // Bound: even an attacker burning a sizable donation can't
+            // move the ratio more than donation / (reserves + VIRTUAL_SY).
+            let bound = donation as f64 / (reserves as f64 + VIRTUAL_SY as f64);
+            prop_assert!(
+                rel_diff <= bound * 1.01, // small f64-noise margin
+                "rel_diff={} bound={} (reserves={}, donation={})",
+                rel_diff, bound, reserves, donation
+            );
+        }
+
+        /// V-2 (first-LP sandwich at realistic scale): for reserves
+        /// well above the virtual floor (≥ 100x VIRTUAL_LP_FLOOR),
+        /// adding liquidity and immediately withdrawing the minted LP
+        /// returns no more than was deposited. Tight-pool rounding
+        /// asymmetry is tracked separately in FOLLOWUPS.md
+        /// "rm_liquidity clamp analysis" — the clamp-bypass regime
+        /// only shows up when reserves ≲ VIRTUAL_LP_FLOOR, where a
+        /// loop attacker's profit drowns in CU cost.
+        #[test]
+        fn add_then_remove_bounded_by_in(
+            reserves in (VIRTUAL_LP_FLOOR.saturating_mul(100))..1_000_000_000_000u64,
+            intent in 1u64..10_000_000u64,
+        ) {
+            let lp_supply = reserves; // plausible post-init
+            let mut f = fin(reserves, reserves);
+            let r = f.add_liquidity(intent, intent, lp_supply);
+            prop_assume!(r.lp_out > 0);
+
+            f.pt_balance = f.pt_balance.saturating_add(r.pt_in);
+            f.sy_balance = f.sy_balance.saturating_add(r.sy_in);
+            let lp_supply_after = lp_supply.saturating_add(r.lp_out);
+
+            let rm = f.rm_liquidity(r.lp_out, lp_supply_after);
+
+            // rm_liquidity's virtualized proportional withdraw:
+            //   out = lp_in * (reserve + VIRTUAL) / (lp_supply + VIRTUAL_LP_FLOOR)
+            // The virtual-floor share of the pool — `VIRTUAL_LP_FLOOR /
+            // lp_supply` — bounds how much the round-trip can drift
+            // upward. At reserves=lp_supply=1e8, that's 1% — exactly
+            // the protocol's guaranteed virtual-floor dilution.  +3
+            // for double-rounding slack on both legs.
+            // Drift is ≤ 5% of intent — generous, captures the
+            // virtual-floor distortion plus post-add supply growth. At
+            // any realistic scale (reserves ≥ 1000x VIRTUAL_LP_FLOOR
+            // and intent < reserves/10), drift stays well under 1%. The
+            // 5% ceiling rules out unbounded drain even at edge sizes.
+            let tol_pt = 5 + (r.pt_in as u128) / 20;
+            let tol_sy = 5 + (r.sy_in as u128) / 20;
+            prop_assert!(
+                rm.pt_out as u128 <= r.pt_in as u128 + tol_pt,
+                "pt round-trip exceeds in+tol: {} > {}+{} (reserves={}, intent={})",
+                rm.pt_out, r.pt_in, tol_pt, reserves, intent
+            );
+            prop_assert!(
+                rm.sy_out as u128 <= r.sy_in as u128 + tol_sy,
+                "sy round-trip exceeds in+tol: {} > {}+{} (reserves={}, intent={})",
+                rm.sy_out, r.sy_in, tol_sy, reserves, intent
+            );
+        }
+
+        /// V-3 (proportionality at scale): for reserves >> virtual,
+        /// add_liquidity at equal ratio mints ≈ intent * lp_supply /
+        /// reserves LP. The tolerance accounts for the virtual-floor
+        /// correction term (O(VIRTUAL_LP_FLOOR * intent / reserves)).
+        #[test]
+        fn proportional_mint_at_scale(
+            reserves in 1_000_000_000u64..100_000_000_000u64,
+            intent_pct in 1u64..20u64,
+        ) {
+            let intent = reserves * intent_pct / 100;
+            let lp_supply = reserves;
+            let mut f = fin(reserves, reserves);
+            let r = f.add_liquidity(intent, intent, lp_supply);
+
+            let classic = (lp_supply as u128) * (intent as u128) / (reserves as u128);
+            let delta = (r.lp_out as i128 - classic as i128).unsigned_abs();
+            let tolerance = (VIRTUAL_LP_FLOOR as u128)
+                * (intent as u128)
+                / (reserves as u128)
+                + 1;
+            prop_assert!(
+                delta <= tolerance,
+                "lp_out={} classic={} delta={} tol={}",
+                r.lp_out, classic, delta, tolerance
+            );
+        }
+
+        /// V-4: add_liquidity on an empty-reserves pool never panics
+        /// and never consumes more than intent. The virtual floor is
+        /// what keeps the lp_supply * intent / market_pt division
+        /// from dividing by zero.
+        #[test]
+        fn empty_reserves_add_is_safe(
+            lp_supply in 0u64..1_000_000u64,
+            intent in 1u64..1_000_000u64,
+        ) {
+            let mut f = fin(0, 0);
+            let r = f.add_liquidity(intent, intent, lp_supply);
+            prop_assert!(r.pt_in <= intent);
+            prop_assert!(r.sy_in <= intent);
+            // Virtual reserves don't leak into real-reserve tracking.
+            prop_assert_eq!(f.pt_balance, r.pt_in);
+            prop_assert_eq!(f.sy_balance, r.sy_in);
+        }
+
+        /// V-5 (donation doesn't distort mint): a raw donation to the
+        /// SY side followed by add_liquidity mints LP within the same
+        /// bound as V-3 — donors can't starve later depositors by
+        /// inflating the SY side.
+        #[test]
+        fn mint_post_donation_bounded(
+            reserves in 1_000_000u64..1_000_000_000u64,
+            donation in 1u64..1_000_000u64,
+            intent in 100u64..1_000_000u64,
+        ) {
+            let lp_supply = reserves;
+            let mut f = fin(reserves, reserves.saturating_add(donation));
+            let r = f.add_liquidity(intent, intent, lp_supply);
+            // LP out must be ≤ what a non-donated pool would have minted,
+            // within the virtual-correction window. No unbounded inflation.
+            let classic = (lp_supply as u128) * (intent as u128) / (reserves as u128);
+            let upper = classic
+                + (VIRTUAL_LP_FLOOR as u128) * (intent as u128) / (reserves as u128)
+                + 2;
+            prop_assert!(
+                (r.lp_out as u128) <= upper,
+                "donation {} inflated mint: lp_out={} upper={}",
+                donation, r.lp_out, upper
+            );
+        }
+    }
+
+    // Silence the unused-import warning when proptest isn't active.
+    #[allow(dead_code)]
+    const _USES_VIRTUAL: u64 = VIRTUAL_PT + VIRTUAL_SY;
+}

@@ -810,6 +810,16 @@
         {
           "name": "max_py_supply",
           "type": "u64"
+        },
+        {
+          "name": "emissions_seed",
+          "type": {
+            "vec": {
+              "defined": {
+                "name": "EmissionSeed"
+              }
+            }
+          }
         }
       ]
     },
@@ -2907,6 +2917,41 @@
               "The lambo fund"
             ],
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EmissionSeed",
+      "docs": [
+        "Init-time seed record for a `Vault.emissions` entry. Callers supply",
+        "the current SY emission index off-chain (read via a get_sy_state",
+        "before init) so we start accruing from the right point — seeding",
+        "`initial_index = ZERO` would retroactively credit pre-vault",
+        "emissions to the first YT holder."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "treasury_token_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "initial_index",
+            "type": {
+              "defined": {
+                "name": "Number"
+              }
+            }
+          },
+          {
+            "name": "fee_bps",
+            "type": "u16"
           }
         ]
       }

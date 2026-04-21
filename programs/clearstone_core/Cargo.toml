@@ -34,3 +34,6 @@ getrandom = { version = "=0.2.10", features = ["custom"] }
 ahash = "=0.7.8"
 hashbrown = "=0.12.3"
 rand_core = "=0.5.1"
+
+[dev-dependencies]
+proptest = "1.5"

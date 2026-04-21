@@ -547,6 +547,30 @@ pub struct EmissionInfo {
     pub treasury_emission: u64,
 }
 
+/// Init-time seed record for a `Vault.emissions` entry. Callers supply
+/// the current SY emission index off-chain (read via a get_sy_state
+/// before init) so we start accruing from the right point — seeding
+/// `initial_index = ZERO` would retroactively credit pre-vault
+/// emissions to the first YT holder.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Default, Debug)]
+pub struct EmissionSeed {
+    pub token_account: Pubkey,
+    pub treasury_token_account: Pubkey,
+    pub initial_index: Number,
+    pub fee_bps: u16,
+}
+
+impl EmissionSeed {
+    pub fn into_info(self) -> EmissionInfo {
+        EmissionInfo::new(
+            self.token_account,
+            self.treasury_token_account,
+            self.initial_index,
+            self.fee_bps,
+        )
+    }
+}
+
 impl EmissionInfo {
     pub fn new(
         token_account: Pubkey,

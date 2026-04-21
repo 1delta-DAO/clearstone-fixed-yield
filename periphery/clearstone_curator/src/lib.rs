@@ -20,7 +20,7 @@ use anchor_spl::token_interface::{
     transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked,
 };
 use clearstone_core::program::ClearstoneCore;
-use clearstone_core::state::MarketTwo;
+use clearstone_core::state::{MarketTwo, Vault as CoreVault};
 use generic_exchange_rate_sy::program::GenericExchangeRateSy;
 use precise_number::Number;
 
@@ -479,6 +479,87 @@ pub mod clearstone_curator {
         Ok(())
     }
 
+    /// Re-read one allocation's market + the vault's holdings and
+    /// recompute `allocations[i].deployed_base` + `total_assets` from
+    /// on-chain state. Permissionless — anyone can call this to refresh
+    /// the stored mark before `harvest_fees` reads it.
+    ///
+    /// Base-equivalent formula, per allocation:
+    ///   vault_pt      * pt_redemption * sy_rate
+    /// + vault_sy      * sy_rate
+    /// + lp_share      * (pool_pt * pt_redemption + pool_sy) * sy_rate
+    /// where
+    ///   pt_redemption = core_vault.pt_redemption_rate()       // SY per PT
+    ///   sy_rate       = core_vault.last_seen_sy_exchange_rate  // base per SY
+    ///   lp_share      = vault_lp / market_lp_supply
+    ///
+    /// Stale inputs: `last_seen_sy_exchange_rate` only refreshes on a
+    /// vault-touching ix (strip/merge/stage_yt_yield/collect_interest).
+    /// Callers who need a current mark should run `stage_yt_yield` on
+    /// the vault before mark_to_market.
+    pub fn mark_to_market(
+        ctx: Context<MarkToMarket>,
+        allocation_index: u16,
+    ) -> Result<()> {
+        let idx = allocation_index as usize;
+        let v = &mut ctx.accounts.vault;
+        require!(idx < v.allocations.len(), CuratorError::AllocationIndexOutOfRange);
+        require_keys_eq!(
+            v.allocations[idx].market,
+            ctx.accounts.market.key(),
+            CuratorError::AllocationMarketMismatch
+        );
+
+        let core_vault = &ctx.accounts.core_vault;
+        require_keys_eq!(
+            ctx.accounts.market.vault,
+            core_vault.key(),
+            CuratorError::AllocationMarketMismatch
+        );
+
+        let sy_rate = core_vault.last_seen_sy_exchange_rate;
+        let pt_redemption = core_vault.pt_redemption_rate();
+
+        let pt_held = ctx.accounts.vault_pt_ata.amount;
+        let sy_held = ctx.accounts.vault_sy_ata.amount;
+        let lp_held = ctx.accounts.vault_lp_ata.amount;
+        let lp_supply = ctx.accounts.mint_lp.supply;
+        let pool_pt = ctx.accounts.market_escrow_pt.amount;
+        let pool_sy = ctx.accounts.market_escrow_sy.amount;
+
+        // Direct PT + SY holdings → SY-equivalent.
+        let mut sy_eq = Number::from_natural_u64(pt_held) * pt_redemption
+            + Number::from_natural_u64(sy_held);
+
+        if lp_held > 0 && lp_supply > 0 {
+            let pool_sy_eq = Number::from_natural_u64(pool_pt) * pt_redemption
+                + Number::from_natural_u64(pool_sy);
+            let lp_share = Number::from_ratio(lp_held as u128, lp_supply as u128);
+            sy_eq += lp_share * pool_sy_eq;
+        }
+
+        let base_eq = (sy_eq * sy_rate).floor_u64();
+        v.allocations[idx].deployed_base = base_eq;
+
+        // Refresh total_assets = idle + Σ deployed.
+        let idle = ctx.accounts.base_escrow.amount;
+        let sum_deployed: u64 = v
+            .allocations
+            .iter()
+            .map(|a| a.deployed_base)
+            .fold(0u64, |acc, x| acc.saturating_add(x));
+        v.total_assets = idle.saturating_add(sum_deployed);
+
+        emit!(MarkedToMarket {
+            vault: v.key(),
+            market: ctx.accounts.market.key(),
+            allocation_index,
+            deployed_base: base_eq,
+            total_assets: v.total_assets,
+        });
+        Ok(())
+    }
+
     /// Mint performance-fee shares to the curator's UserPosition.
     ///
     /// `current_total_assets` is the curator's attested mark-to-market
@@ -681,6 +762,15 @@ pub struct ReallocatedFromMarket {
     pub allocation_index: u16,
     pub base_out: u64,
     pub deployed_base: u64,
+}
+
+#[event]
+pub struct MarkedToMarket {
+    pub vault: Pubkey,
+    pub market: Pubkey,
+    pub allocation_index: u16,
+    pub deployed_base: u64,
+    pub total_assets: u64,
 }
 
 #[event]
@@ -971,6 +1061,51 @@ pub struct ReallocateFromMarket<'info> {
     pub core_program: Program<'info, ClearstoneCore>,
     /// CHECK: core_program's event_authority PDA.
     pub core_event_authority: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct MarkToMarket<'info> {
+    #[account(
+        mut,
+        has_one = base_escrow,
+    )]
+    pub vault: Box<Account<'info, CuratorVault>>,
+
+    #[account(address = vault.base_escrow)]
+    pub base_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    pub market: Box<Account<'info, MarketTwo>>,
+
+    /// Core vault backing this market — source of the SY exchange rate
+    /// and PT redemption rate used in the mark.
+    #[account(address = market.vault)]
+    pub core_vault: Box<Account<'info, CoreVault>>,
+
+    #[account(address = market.token_pt_escrow)]
+    pub market_escrow_pt: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(address = market.token_sy_escrow)]
+    pub market_escrow_sy: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(address = market.mint_lp)]
+    pub mint_lp: Box<InterfaceAccount<'info, Mint>>,
+
+    /// CHECK: PT mint for this market.
+    #[account(address = market.mint_pt)]
+    pub mint_pt: UncheckedAccount<'info>,
+
+    #[account(associated_token::mint = mint_pt, associated_token::authority = vault)]
+    pub vault_pt_ata: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// SY mint for this market — used to derive the vault's SY ATA.
+    #[account(address = market.mint_sy)]
+    pub sy_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    #[account(associated_token::mint = sy_mint, associated_token::authority = vault)]
+    pub vault_sy_ata: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(associated_token::mint = mint_lp, associated_token::authority = vault)]
+    pub vault_lp_ata: Box<InterfaceAccount<'info, TokenAccount>>,
 }
 
 #[derive(Accounts)]

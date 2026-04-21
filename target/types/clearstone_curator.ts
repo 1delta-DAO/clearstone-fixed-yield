@@ -196,6 +196,91 @@ export type ClearstoneCurator = {
       ]
     },
     {
+      "name": "markToMarket",
+      "docs": [
+        "Re-read one allocation's market + the vault's holdings and",
+        "recompute `allocations[i].deployed_base` + `total_assets` from",
+        "on-chain state. Permissionless — anyone can call this to refresh",
+        "the stored mark before `harvest_fees` reads it.",
+        "",
+        "Base-equivalent formula, per allocation:",
+        "vault_pt      * pt_redemption * sy_rate",
+        "+ vault_sy      * sy_rate",
+        "+ lp_share      * (pool_pt * pt_redemption + pool_sy) * sy_rate",
+        "where",
+        "pt_redemption = core_vault.pt_redemption_rate()       // SY per PT",
+        "sy_rate       = core_vault.last_seen_sy_exchange_rate  // base per SY",
+        "lp_share      = vault_lp / market_lp_supply",
+        "",
+        "Stale inputs: `last_seen_sy_exchange_rate` only refreshes on a",
+        "vault-touching ix (strip/merge/stage_yt_yield/collect_interest).",
+        "Callers who need a current mark should run `stage_yt_yield` on",
+        "the vault before mark_to_market."
+      ],
+      "discriminator": [
+        150,
+        137,
+        227,
+        92,
+        96,
+        30,
+        124,
+        221
+      ],
+      "accounts": [
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "baseEscrow"
+        },
+        {
+          "name": "market"
+        },
+        {
+          "name": "coreVault",
+          "docs": [
+            "Core vault backing this market — source of the SY exchange rate",
+            "and PT redemption rate used in the mark."
+          ]
+        },
+        {
+          "name": "marketEscrowPt"
+        },
+        {
+          "name": "marketEscrowSy"
+        },
+        {
+          "name": "mintLp"
+        },
+        {
+          "name": "mintPt"
+        },
+        {
+          "name": "vaultPtAta"
+        },
+        {
+          "name": "syMint",
+          "docs": [
+            "SY mint for this market — used to derive the vault's SY ATA."
+          ]
+        },
+        {
+          "name": "vaultSyAta"
+        },
+        {
+          "name": "vaultLpAta"
+        }
+      ],
+      "args": [
+        {
+          "name": "allocationIndex",
+          "type": "u16"
+        }
+      ]
+    },
+    {
       "name": "reallocateFromMarket",
       "docs": [
         "Pull one allocation back out of its market into idle base.",
@@ -636,6 +721,19 @@ export type ClearstoneCurator = {
         17,
         27
       ]
+    },
+    {
+      "name": "vault",
+      "discriminator": [
+        211,
+        8,
+        232,
+        43,
+        2,
+        152,
+        117,
+        119
+      ]
     }
   ],
   "events": [
@@ -676,6 +774,19 @@ export type ClearstoneCurator = {
         254,
         76,
         10
+      ]
+    },
+    {
+      "name": "markedToMarket",
+      "discriminator": [
+        160,
+        241,
+        140,
+        180,
+        132,
+        42,
+        189,
+        241
       ]
     },
     {
@@ -845,6 +956,30 @@ export type ClearstoneCurator = {
           {
             "name": "totalWeightBps",
             "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "claimLimits",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "claimWindowStartTimestamp",
+            "type": "u32"
+          },
+          {
+            "name": "totalClaimAmountInWindow",
+            "type": "u64"
+          },
+          {
+            "name": "maxClaimAmountPerWindow",
+            "type": "u64"
+          },
+          {
+            "name": "claimWindowDurationSeconds",
+            "type": "u32"
           }
         ]
       }
@@ -1052,6 +1187,69 @@ export type ClearstoneCurator = {
       }
     },
     {
+      "name": "emissionInfo",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "tokenAccount",
+            "docs": [
+              "The token account for the emission where the vault authority is the authority"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "initialIndex",
+            "type": {
+              "defined": {
+                "name": "number"
+              }
+            }
+          },
+          {
+            "name": "lastSeenIndex",
+            "type": {
+              "defined": {
+                "name": "number"
+              }
+            }
+          },
+          {
+            "name": "finalIndex",
+            "docs": [
+              "The final index is used to track the last claimable index after the vault expires"
+            ],
+            "type": {
+              "defined": {
+                "name": "number"
+              }
+            }
+          },
+          {
+            "name": "treasuryTokenAccount",
+            "docs": [
+              "The treasury token account for this reward"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "feeBps",
+            "docs": [
+              "The fee taken from emission collecting"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "treasuryEmission",
+            "docs": [
+              "The lambo fund"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "feesHarvested",
       "type": {
         "kind": "struct",
@@ -1118,6 +1316,34 @@ export type ClearstoneCurator = {
           {
             "name": "windowDurationSeconds",
             "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "markedToMarket",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "allocationIndex",
+            "type": "u16"
+          },
+          {
+            "name": "deployedBase",
+            "type": "u64"
+          },
+          {
+            "name": "totalAssets",
+            "type": "u64"
           }
         ]
       }
@@ -1350,6 +1576,23 @@ export type ClearstoneCurator = {
       }
     },
     {
+      "name": "number",
+      "docs": [
+        "High precision number, stored as 4 u64 words in little endian"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "array": [
+              "u64",
+              4
+            ]
+          }
+        ]
+      }
+    },
+    {
       "name": "reallocatedFromMarket",
       "type": {
         "kind": "struct",
@@ -1420,6 +1663,258 @@ export type ClearstoneCurator = {
           },
           {
             "name": "shares",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "vault",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "curator",
+            "docs": [
+              "Curator authorized to modify this vault's mutable settings.",
+              "Set at init; replaces the global admin-principle whitelist."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "creatorFeeBps",
+            "docs": [
+              "Ceiling committed at init for this vault's interest fee.",
+              "Bounded by PROTOCOL_FEE_MAX_BPS at creation, immutable after.",
+              "See I-E1 / I-E2 in PLAN.md §3."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "reentrancyGuard",
+            "docs": [
+              "Non-reentrancy latch. Set to true before any untrusted SY CPI and",
+              "cleared on the way out. User-facing entrypoints must assert it is",
+              "false on entry. See I-C1 in PLAN.md §3."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "syProgram",
+            "docs": [
+              "Link to SY program"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "mintSy",
+            "docs": [
+              "Mint for SY token"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "mintYt",
+            "docs": [
+              "Mint for the vault-specific YT token"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "mintPt",
+            "docs": [
+              "Mint for the vault-specific PT token"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "escrowYt",
+            "docs": [
+              "Escrow account for holding deposited YT"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "escrowSy",
+            "docs": [
+              "Escrow account that holds temporary SY tokens",
+              "As an interchange between users and the SY program"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "yieldPosition",
+            "docs": [
+              "Link to a vault-owned YT position",
+              "This account collects yield from all \"unstaked\" YT"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "addressLookupTable",
+            "docs": [
+              "Address lookup table key for vault"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "startTs",
+            "docs": [
+              "start timestamp"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "duration",
+            "docs": [
+              "seconds duration"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "signerSeed",
+            "docs": [
+              "Seed for CPI signing"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "docs": [
+              "Authority for CPI signing"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "signerBump",
+            "docs": [
+              "bump for signer authority PDA"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                1
+              ]
+            }
+          },
+          {
+            "name": "lastSeenSyExchangeRate",
+            "docs": [
+              "Last seen SY exchange rate",
+              "This continues to be updated even after vault maturity to track SY appreciation for treasury collection"
+            ],
+            "type": {
+              "defined": {
+                "name": "number"
+              }
+            }
+          },
+          {
+            "name": "allTimeHighSyExchangeRate",
+            "docs": [
+              "This is the all time high exchange rate for SY"
+            ],
+            "type": {
+              "defined": {
+                "name": "number"
+              }
+            }
+          },
+          {
+            "name": "finalSyExchangeRate",
+            "docs": [
+              "This is the exchange rate for SY when the vault expires"
+            ],
+            "type": {
+              "defined": {
+                "name": "number"
+              }
+            }
+          },
+          {
+            "name": "totalSyInEscrow",
+            "docs": [
+              "How much SY is held in escrow"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "syForPt",
+            "docs": [
+              "The total SY set aside to back the PT holders",
+              "This value is updated on every operation that touches the PT supply or the last seen exchange rate"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "ptSupply",
+            "docs": [
+              "Total supply of PT"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "treasurySy",
+            "docs": [
+              "Amount of SY staged for the treasury"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "uncollectedSy",
+            "docs": [
+              "SY that has been earned by YT, but not yet collected"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "treasurySyTokenAccount",
+            "type": "pubkey"
+          },
+          {
+            "name": "interestBpsFee",
+            "type": "u16"
+          },
+          {
+            "name": "minOpSizeStrip",
+            "type": "u64"
+          },
+          {
+            "name": "minOpSizeMerge",
+            "type": "u64"
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "emissions",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "emissionInfo"
+                }
+              }
+            }
+          },
+          {
+            "name": "cpiAccounts",
+            "type": {
+              "defined": {
+                "name": "cpiAccounts"
+              }
+            }
+          },
+          {
+            "name": "claimLimits",
+            "type": {
+              "defined": {
+                "name": "claimLimits"
+              }
+            }
+          },
+          {
+            "name": "maxPySupply",
             "type": "u64"
           }
         ]

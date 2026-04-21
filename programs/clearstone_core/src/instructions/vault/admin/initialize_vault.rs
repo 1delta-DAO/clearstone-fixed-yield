@@ -16,7 +16,21 @@ use token_util::{create_associated_token_account_2022, create_token_account};
 use crate::{state::*, utils::cpi_init_sy_personal_account};
 
 #[derive(Accounts)]
-#[instruction(start_timestamp: u32, duration: u32, interest_bps_fee: u16, cpi_accounts: CpiAccounts)]
+#[instruction(
+    start_timestamp: u32,
+    duration: u32,
+    interest_bps_fee: u16,
+    cpi_accounts: CpiAccounts,
+    _min_op_size_strip: u64,
+    _min_op_size_merge: u64,
+    _pt_metadata_name: String,
+    _pt_metadata_symbol: String,
+    _pt_metadata_uri: String,
+    _curator: Pubkey,
+    _creator_fee_bps: u16,
+    _max_py_supply: u64,
+    emissions_seed: Vec<EmissionSeed>,
+)]
 pub struct InitializeVault<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
@@ -35,7 +49,7 @@ pub struct InitializeVault<'info> {
         init,
         payer = payer,
         // The space for the vault is the sum of the static space and the space of the CPI accounts
-        space = Vault::size_of_static(0) + cpi_accounts.size_of(),
+        space = Vault::size_of_static(emissions_seed.len()) + cpi_accounts.size_of(),
     )]
     pub vault: Box<Account<'info, Vault>>,
 
@@ -258,6 +272,7 @@ pub fn handler(
     curator: Pubkey,
     creator_fee_bps: u16,
     max_py_supply: u64,
+    emissions_seed: Vec<EmissionSeed>,
 ) -> Result<()> {
     // PLAN §6.2 init validations — these are the immutable safety rails.
     require!(
@@ -294,6 +309,16 @@ pub fn handler(
         creator_fee_bps,
         max_py_supply,
     );
+
+    // Seed vault-level emissions at init. The `Vec<EmissionSeed>` is
+    // typed/validated off-chain by the curator pre-init (a live
+    // `get_sy_state` gives the correct `initial_index` per reward
+    // mint). Setting it any later would require re-sizing the vault
+    // account and dragging the index forward atomically — simpler to
+    // just fix at init and treat emissions as a permanent feature.
+    for seed in emissions_seed.into_iter() {
+        ctx.accounts.vault.emissions.push(seed.into_info());
+    }
 
     ctx.accounts.set_yield_position();
 

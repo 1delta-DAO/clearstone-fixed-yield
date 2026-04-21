@@ -190,6 +190,91 @@
       ]
     },
     {
+      "name": "mark_to_market",
+      "docs": [
+        "Re-read one allocation's market + the vault's holdings and",
+        "recompute `allocations[i].deployed_base` + `total_assets` from",
+        "on-chain state. Permissionless — anyone can call this to refresh",
+        "the stored mark before `harvest_fees` reads it.",
+        "",
+        "Base-equivalent formula, per allocation:",
+        "vault_pt      * pt_redemption * sy_rate",
+        "+ vault_sy      * sy_rate",
+        "+ lp_share      * (pool_pt * pt_redemption + pool_sy) * sy_rate",
+        "where",
+        "pt_redemption = core_vault.pt_redemption_rate()       // SY per PT",
+        "sy_rate       = core_vault.last_seen_sy_exchange_rate  // base per SY",
+        "lp_share      = vault_lp / market_lp_supply",
+        "",
+        "Stale inputs: `last_seen_sy_exchange_rate` only refreshes on a",
+        "vault-touching ix (strip/merge/stage_yt_yield/collect_interest).",
+        "Callers who need a current mark should run `stage_yt_yield` on",
+        "the vault before mark_to_market."
+      ],
+      "discriminator": [
+        150,
+        137,
+        227,
+        92,
+        96,
+        30,
+        124,
+        221
+      ],
+      "accounts": [
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "base_escrow"
+        },
+        {
+          "name": "market"
+        },
+        {
+          "name": "core_vault",
+          "docs": [
+            "Core vault backing this market — source of the SY exchange rate",
+            "and PT redemption rate used in the mark."
+          ]
+        },
+        {
+          "name": "market_escrow_pt"
+        },
+        {
+          "name": "market_escrow_sy"
+        },
+        {
+          "name": "mint_lp"
+        },
+        {
+          "name": "mint_pt"
+        },
+        {
+          "name": "vault_pt_ata"
+        },
+        {
+          "name": "sy_mint",
+          "docs": [
+            "SY mint for this market — used to derive the vault's SY ATA."
+          ]
+        },
+        {
+          "name": "vault_sy_ata"
+        },
+        {
+          "name": "vault_lp_ata"
+        }
+      ],
+      "args": [
+        {
+          "name": "allocation_index",
+          "type": "u16"
+        }
+      ]
+    },
+    {
       "name": "reallocate_from_market",
       "docs": [
         "Pull one allocation back out of its market into idle base.",
@@ -630,6 +715,19 @@
         17,
         27
       ]
+    },
+    {
+      "name": "Vault",
+      "discriminator": [
+        211,
+        8,
+        232,
+        43,
+        2,
+        152,
+        117,
+        119
+      ]
     }
   ],
   "events": [
@@ -670,6 +768,19 @@
         254,
         76,
         10
+      ]
+    },
+    {
+      "name": "MarkedToMarket",
+      "discriminator": [
+        160,
+        241,
+        140,
+        180,
+        132,
+        42,
+        189,
+        241
       ]
     },
     {
@@ -839,6 +950,30 @@
           {
             "name": "total_weight_bps",
             "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ClaimLimits",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "claim_window_start_timestamp",
+            "type": "u32"
+          },
+          {
+            "name": "total_claim_amount_in_window",
+            "type": "u64"
+          },
+          {
+            "name": "max_claim_amount_per_window",
+            "type": "u64"
+          },
+          {
+            "name": "claim_window_duration_seconds",
+            "type": "u32"
           }
         ]
       }
@@ -1046,6 +1181,69 @@
       }
     },
     {
+      "name": "EmissionInfo",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token_account",
+            "docs": [
+              "The token account for the emission where the vault authority is the authority"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "initial_index",
+            "type": {
+              "defined": {
+                "name": "Number"
+              }
+            }
+          },
+          {
+            "name": "last_seen_index",
+            "type": {
+              "defined": {
+                "name": "Number"
+              }
+            }
+          },
+          {
+            "name": "final_index",
+            "docs": [
+              "The final index is used to track the last claimable index after the vault expires"
+            ],
+            "type": {
+              "defined": {
+                "name": "Number"
+              }
+            }
+          },
+          {
+            "name": "treasury_token_account",
+            "docs": [
+              "The treasury token account for this reward"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_bps",
+            "docs": [
+              "The fee taken from emission collecting"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "treasury_emission",
+            "docs": [
+              "The lambo fund"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "FeesHarvested",
       "type": {
         "kind": "struct",
@@ -1112,6 +1310,34 @@
           {
             "name": "window_duration_seconds",
             "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MarkedToMarket",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "allocation_index",
+            "type": "u16"
+          },
+          {
+            "name": "deployed_base",
+            "type": "u64"
+          },
+          {
+            "name": "total_assets",
+            "type": "u64"
           }
         ]
       }
@@ -1344,6 +1570,23 @@
       }
     },
     {
+      "name": "Number",
+      "docs": [
+        "High precision number, stored as 4 u64 words in little endian"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "array": [
+              "u64",
+              4
+            ]
+          }
+        ]
+      }
+    },
+    {
       "name": "ReallocatedFromMarket",
       "type": {
         "kind": "struct",
@@ -1414,6 +1657,258 @@
           },
           {
             "name": "shares",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Vault",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "curator",
+            "docs": [
+              "Curator authorized to modify this vault's mutable settings.",
+              "Set at init; replaces the global admin-principle whitelist."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "creator_fee_bps",
+            "docs": [
+              "Ceiling committed at init for this vault's interest fee.",
+              "Bounded by PROTOCOL_FEE_MAX_BPS at creation, immutable after.",
+              "See I-E1 / I-E2 in PLAN.md §3."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "reentrancy_guard",
+            "docs": [
+              "Non-reentrancy latch. Set to true before any untrusted SY CPI and",
+              "cleared on the way out. User-facing entrypoints must assert it is",
+              "false on entry. See I-C1 in PLAN.md §3."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "sy_program",
+            "docs": [
+              "Link to SY program"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "mint_sy",
+            "docs": [
+              "Mint for SY token"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "mint_yt",
+            "docs": [
+              "Mint for the vault-specific YT token"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "mint_pt",
+            "docs": [
+              "Mint for the vault-specific PT token"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "escrow_yt",
+            "docs": [
+              "Escrow account for holding deposited YT"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "escrow_sy",
+            "docs": [
+              "Escrow account that holds temporary SY tokens",
+              "As an interchange between users and the SY program"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "yield_position",
+            "docs": [
+              "Link to a vault-owned YT position",
+              "This account collects yield from all \"unstaked\" YT"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "address_lookup_table",
+            "docs": [
+              "Address lookup table key for vault"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "start_ts",
+            "docs": [
+              "start timestamp"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "duration",
+            "docs": [
+              "seconds duration"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "signer_seed",
+            "docs": [
+              "Seed for CPI signing"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "docs": [
+              "Authority for CPI signing"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "signer_bump",
+            "docs": [
+              "bump for signer authority PDA"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                1
+              ]
+            }
+          },
+          {
+            "name": "last_seen_sy_exchange_rate",
+            "docs": [
+              "Last seen SY exchange rate",
+              "This continues to be updated even after vault maturity to track SY appreciation for treasury collection"
+            ],
+            "type": {
+              "defined": {
+                "name": "Number"
+              }
+            }
+          },
+          {
+            "name": "all_time_high_sy_exchange_rate",
+            "docs": [
+              "This is the all time high exchange rate for SY"
+            ],
+            "type": {
+              "defined": {
+                "name": "Number"
+              }
+            }
+          },
+          {
+            "name": "final_sy_exchange_rate",
+            "docs": [
+              "This is the exchange rate for SY when the vault expires"
+            ],
+            "type": {
+              "defined": {
+                "name": "Number"
+              }
+            }
+          },
+          {
+            "name": "total_sy_in_escrow",
+            "docs": [
+              "How much SY is held in escrow"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "sy_for_pt",
+            "docs": [
+              "The total SY set aside to back the PT holders",
+              "This value is updated on every operation that touches the PT supply or the last seen exchange rate"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pt_supply",
+            "docs": [
+              "Total supply of PT"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "treasury_sy",
+            "docs": [
+              "Amount of SY staged for the treasury"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "uncollected_sy",
+            "docs": [
+              "SY that has been earned by YT, but not yet collected"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "treasury_sy_token_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "interest_bps_fee",
+            "type": "u16"
+          },
+          {
+            "name": "min_op_size_strip",
+            "type": "u64"
+          },
+          {
+            "name": "min_op_size_merge",
+            "type": "u64"
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "emissions",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "EmissionInfo"
+                }
+              }
+            }
+          },
+          {
+            "name": "cpi_accounts",
+            "type": {
+              "defined": {
+                "name": "CpiAccounts"
+              }
+            }
+          },
+          {
+            "name": "claim_limits",
+            "type": {
+              "defined": {
+                "name": "ClaimLimits"
+              }
+            }
+          },
+          {
+            "name": "max_py_supply",
             "type": "u64"
           }
         ]

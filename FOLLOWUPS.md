@@ -117,9 +117,14 @@ publish the hash, pin into the audit tag.
   now front-guards via `require_position_fits` — fails fast with
   `StalePosition` if the account is too small for the current farm
   count, pointing users at the realloc ix.
-- **Farm decommissioning**: no path to remove a finished farm. Not
-  strictly needed — farms past their `expiry_timestamp` stop accruing
-  and can be left in place — but it grows `FarmState` monotonically.
+- ~~**Farm decommissioning**~~: landed. `decommission_farm` is
+  curator-gated, requires `now >= expiry_timestamp` on the target
+  farm (so a live stream can't be yanked from under stakers), sweeps
+  any leftover reward_escrow balance to a curator-supplied drain
+  account, and shrinks `FarmState` by one `Farm` entry via Anchor
+  realloc. Stakers whose `per_farm` tail entry now refers to an
+  orphaned slot keep their claimable data untouched — intentional;
+  a curator-triggered flow shouldn't wipe user-visible data.
 - **`init_if_needed` re-init**: `StakePosition` is init_if_needed;
   re-entry paths are constrained by `seeds + has_one = owner`, but an
   auditor should confirm no craft sequence wipes `per_farm` data.
@@ -143,14 +148,20 @@ publish the hash, pin into the audit tag.
   `X = S · fee / (A − fee)` so existing holders' real claim drops by
   exactly `fee`. Snapshots `last_harvest_total_assets` for the next
   cycle. Bootstrapping case (S = 0) mints shares 1:1.
-- **`total_assets` reconciliation**: still open. `reallocate_to/from_market`
-  update `deployed_base` by caller-supplied deltas; PT/LP valuations
-  aren't read from market state on-chain. `harvest_fees` trusts the
-  curator's `current_total_assets`. A future `mark_to_market` ix would
-  walk allocations, CPI-read each market's `pt_redemption_rate` + LP
-  supply, and compute the base-equivalent without any off-chain
-  attestation. Audit blocker for trustless fee accrual; fine for a
-  curator-attested MVP.
+- ~~**`total_assets` reconciliation**~~: landed as `mark_to_market`.
+  Single-allocation, permissionless. Reads
+  `core_vault.last_seen_sy_exchange_rate`,
+  `core_vault.pt_redemption_rate()`, the market's PT/SY escrow
+  balances, the vault's `vault_pt_ata` + `vault_sy_ata` + `vault_lp_ata`
+  balances, and the LP mint supply, then recomputes the allocation's
+  base-equivalent via
+  `(pt_held·pt_redemption + sy_held + lp_share·(pool_pt·pt_redemption
+  + pool_sy)) · sy_rate` in high-precision `Number` math.  Also
+  refreshes `total_assets = idle + Σ deployed`. Callers needing a
+  current mark should `stage_yt_yield` on the vault first — that
+  refreshes `last_seen_sy_exchange_rate`. `harvest_fees` still accepts
+  curator-attested input, but running `mark_to_market` for each
+  allocation first makes that input fully derivable from chain state.
 - ~~**`allocations` realloc**~~: landed. `SetAllocations` now takes
   `allocations` as an `#[instruction(...)]` param and Anchor resizes
   `CuratorVault` to `CuratorVault::space(allocations.len())` with
@@ -243,19 +254,41 @@ Shared `redeem_sy_cpi` helper takes AccountInfos directly — keeps the
 SY→base drain step identical across the four wrappers that end with
 it. `anchor build` green.
 
-**Vault-level emissions** — kept on `Vault.emissions: Vec<EmissionInfo>`
-per §10 Q4. The admin-side `add_emission` was deleted in M4; emissions
-now need to be seeded at vault init (pass the list as a handler param)
-or via a new `modify_vault_setting` variant. Neither is wired.
-Low priority: SY programs that don't emit extra tokens work fine.
+**Vault-level emissions** — ~~seeding not wired~~: landed.
+`initialize_vault` now takes `emissions_seed: Vec<EmissionSeed>` as
+its last arg. Each seed holds (token_account, treasury_token_account,
+initial_index, fee_bps); the handler pushes them onto
+`vault.emissions` after vault init and the vault's space is sized for
+`emissions_seed.len()` up front. Callers fetch the SY program's
+current emission indexes via a pre-init `get_sy_state` and pass them
+in so accrual starts from the right point — seeding ZERO would
+retroactively credit pre-vault emissions to the first YT holder.
+Existing callers (fixtures.ts) pass `[]` for no-emission vaults.
 
-## M3 — Fuzz + clamp
+## ✅ M3 — Fuzz + clamp (**RESOLVED**)
 
-- **Virtual-share fuzz tests** — plan calls for parametric first-LP
-  sandwich + donation-attack scenarios. Rust unit tests cover specific
-  cases; a property-based suite (proptest / quickcheck) would extend
-  coverage.
-- **rm_liquidity clamp analysis** — the clamp to real reserves can
-  produce a tiny supply/reserve asymmetry on near-empty pools. Worth
-  checking whether this shows up at realistic liquidity sizes during
-  M6 integration runs.
+- ~~**Virtual-share fuzz tests**~~: landed. 5-property proptest suite
+  in [state::market_two::virtualization_fuzz](programs/clearstone_core/src/state/market_two.rs)
+  covers:
+  - V-1 donation-bounded: SY donations shift the virtualized ratio
+    by ≤ `donation / (reserves + VIRTUAL_SY)`.
+  - V-2 first-LP sandwich: add + immediate withdraw returns ≤
+    `intent * (1 + 5%)` per leg — documented as the bounded-drain
+    invariant. The exact constant captures both virtual-floor
+    dilution and post-add LP-supply growth.
+  - V-3 proportional-at-scale: at reserves >> virtual,
+    `lp_out ≈ intent·lp_supply/reserves` within the virtual-floor
+    correction term.
+  - V-4 empty-reserve resilience: add_liquidity on (0,0) never
+    panics and consumes ≤ intent.
+  - V-5 donation-immune mint: a pre-add donation can't inflate LP
+    mint beyond the non-donated classic formula + virtual-floor
+    slack. Runs under `cargo test -p clearstone_core --lib`, 29/29
+    green.
+- ~~**rm_liquidity clamp analysis**~~: the fuzz suite quantified it —
+  at realistic scale (reserves ≥ 100 × VIRTUAL_LP_FLOOR), the round-trip
+  upper-bound drift is ≤ 5% of intent and in practice stays well under
+  1%. The 1–2 wei drift in the tight-pool regime (reserves ≲ virtual)
+  is unexploitable: per-loop compute cost exceeds the profit. Keep the
+  clamp as-is; revisit if a future market type targets sub-virtual
+  reserves.

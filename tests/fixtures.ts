@@ -616,7 +616,8 @@ export async function setupVault(params: SetupVaultParams): Promise<VaultHandles
       "https://example.com/pt.json",
       curator,
       creatorFeeBps,
-      maxPySupply
+      maxPySupply,
+      [] // emissions_seed: none by default; tests that need rewards seed inline
     )
     .accounts({
       payer: payer.publicKey,
@@ -999,7 +1000,8 @@ export async function setupVaultOverNonsense(
       "https://example.com/pt.json",
       curator,
       creatorFeeBps,
-      maxPySupply
+      maxPySupply,
+      [] // emissions_seed: none by default; tests that need rewards seed inline
     )
     .accounts({
       payer: payer.publicKey,
@@ -1607,7 +1609,8 @@ export async function setupVaultOverReentrant(
       "https://example.com/pt.json",
       curator,
       creatorFeeBps,
-      maxPySupply
+      maxPySupply,
+      [] // emissions_seed: none by default; tests that need rewards seed inline
     )
     .accounts({
       payer: payer.publicKey,

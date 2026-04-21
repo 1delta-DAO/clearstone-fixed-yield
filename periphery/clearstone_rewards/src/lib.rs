@@ -311,6 +311,75 @@ pub mod clearstone_rewards {
     /// serialization. This ix lets the owner re-size first; the handler
     /// body is empty because Anchor's `realloc` attribute does the work
     /// (and tops up rent from `owner`).
+    /// Curator-only: remove a fully-expired farm entry.
+    ///
+    /// Only callable when `now >= expiry_timestamp` — prevents the
+    /// curator from yanking a live emission stream out from under
+    /// stakers. Any leftover tokens in the reward_escrow ATA are
+    /// swept back to `reward_drain` (curator's destination) before
+    /// the Farm slot is removed from the vec. Shrinks `FarmState` by
+    /// one `Farm` entry — Anchor realloc keeps the account size tight.
+    ///
+    /// Stakers whose `per_farm` vec is longer than the new farm count
+    /// keep their trailing claimable buckets untouched but they're now
+    /// orphaned (no Farm to resolve). The existing `realloc_stake_position`
+    /// ix doesn't shrink; that's a deliberate choice — don't wipe
+    /// user-visible data in a curator-triggered flow.
+    pub fn decommission_farm(ctx: Context<DecommissionFarm>) -> Result<()> {
+        update_indexes(
+            &mut ctx.accounts.farm_state,
+            Clock::get()?.unix_timestamp as u32,
+        );
+
+        let now = Clock::get()?.unix_timestamp as u32;
+
+        let f = &mut ctx.accounts.farm_state;
+        let farm_idx = f
+            .farms
+            .iter()
+            .position(|fr| fr.reward_mint == ctx.accounts.reward_mint.key())
+            .ok_or(RewardsError::FarmNotFound)?;
+
+        require!(
+            now >= f.farms[farm_idx].expiry_timestamp,
+            RewardsError::FarmStillLive
+        );
+
+        // Sweep any remaining escrow to the curator's drain account.
+        let escrow_balance = ctx.accounts.reward_escrow.amount;
+        if escrow_balance > 0 {
+            let state_key = f.key();
+            let market_key = f.market;
+            let bump = [ctx.bumps.farm_state];
+            let _ = state_key;
+            let seeds: &[&[&[u8]]] = &[&[FARM_STATE_SEED, market_key.as_ref(), &bump]];
+            transfer_checked(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    TransferChecked {
+                        from: ctx.accounts.reward_escrow.to_account_info(),
+                        mint: ctx.accounts.reward_mint.to_account_info(),
+                        to: ctx.accounts.reward_drain.to_account_info(),
+                        authority: ctx.accounts.farm_state.to_account_info(),
+                    },
+                    seeds,
+                ),
+                escrow_balance,
+                ctx.accounts.reward_mint.decimals,
+            )?;
+        }
+
+        let removed_mint = ctx.accounts.reward_mint.key();
+        ctx.accounts.farm_state.farms.remove(farm_idx);
+
+        emit!(FarmDecommissioned {
+            farm_state: ctx.accounts.farm_state.key(),
+            reward_mint: removed_mint,
+            swept_amount: escrow_balance,
+        });
+        Ok(())
+    }
+
     pub fn realloc_stake_position(ctx: Context<ReallocStakePosition>) -> Result<()> {
         emit!(StakePositionReallocated {
             farm_state: ctx.accounts.farm_state.key(),
@@ -505,6 +574,13 @@ pub struct StakePositionReallocated {
     pub farm_state: Pubkey,
     pub owner: Pubkey,
     pub n_farms: u16,
+}
+
+#[event]
+pub struct FarmDecommissioned {
+    pub farm_state: Pubkey,
+    pub reward_mint: Pubkey,
+    pub swept_amount: u64,
 }
 
 // -------------- Accounts --------------
@@ -711,6 +787,41 @@ pub struct RefillFarm<'info> {
 }
 
 #[derive(Accounts)]
+pub struct DecommissionFarm<'info> {
+    #[account(mut)]
+    pub curator: Signer<'info>,
+
+    #[account(
+        mut,
+        has_one = curator,
+        seeds = [FARM_STATE_SEED, farm_state.market.as_ref()],
+        bump,
+        realloc = FarmState::space(farm_state.farms.len().saturating_sub(1)),
+        realloc::payer = curator,
+        realloc::zero = false,
+    )]
+    pub farm_state: Box<Account<'info, FarmState>>,
+
+    pub reward_mint: InterfaceAccount<'info, Mint>,
+
+    /// Farm-state-owned ATA for the reward mint (same as `add_farm`).
+    #[account(
+        mut,
+        associated_token::mint = reward_mint,
+        associated_token::authority = farm_state,
+        associated_token::token_program = token_program,
+    )]
+    pub reward_escrow: InterfaceAccount<'info, TokenAccount>,
+
+    /// Destination for any remaining reward tokens in the escrow.
+    #[account(mut, token::mint = reward_mint)]
+    pub reward_drain: InterfaceAccount<'info, TokenAccount>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct ReallocStakePosition<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
@@ -751,4 +862,6 @@ pub enum RewardsError {
     FarmNotFound,
     #[msg("Stake position is too small for current farm count; call realloc_stake_position")]
     StalePosition,
+    #[msg("Farm is still live; wait until expiry_timestamp before decommissioning")]
+    FarmStillLive,
 }
