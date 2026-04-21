@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk '/DBG initializeVault ix keys/{f=1} f{print; if \\(/Program EKp.*failed/\\) exit}' /tmp/anchor-test.log)"
+    ]
+  }
+}

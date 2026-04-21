@@ -19,7 +19,21 @@ import {
   TransactionInstruction,
   Transaction,
   sendAndConfirmTransaction,
+  ComputeBudgetProgram,
 } from "@solana/web3.js";
+
+/**
+ * Several ixs in this suite cross the default 200k CU budget:
+ *   - initialize_vault: SPL token-2022 escrow setup + init_personal_account
+ *     CPI + Metaplex create_metadata = ~350k CUs observed.
+ *   - init_market_two: self-CPI to strip + SY deposit CPI.
+ *   - any of the wrappers that chain two CPIs.
+ * Bump once at the top of every chain to 600k so we're not tuning
+ * per-test.
+ */
+export const CU_LIMIT_IX = ComputeBudgetProgram.setComputeUnitLimit({
+  units: 600_000,
+});
 import {
   createMint,
   getOrCreateAssociatedTokenAccount,
@@ -237,21 +251,28 @@ export async function mintToUser(
 // ===== Number encoding (precise_number::Number = [u64; 4]) =====
 
 /**
- * precise_number::Number is a tuple struct `Number([u64; 4])`. Anchor's
- * client SDK renders a single unnamed field as the inner value directly.
- * We pass `[bn0, bn1, bn2, bn3]`.
+ * precise_number::Number is a fixed-point tuple struct
+ * `Number([u64; 4])` with a 10^12 denominator — `Number::ONE` is
+ * `[1_000_000_000_000, 0, 0, 0]`, not `[1, 0, 0, 0]`. Passing the
+ * raw integer would get interpreted as 10^-12 and overflow u64 on
+ * downstream division.
  *
- * For tests that only need "a positive number", use this helper — it
- * puts `n` in the low limb and zeros the rest.
+ * Two things to get right:
+ *   1. Multiply by DENOM (1e12) to represent `n` as a natural integer.
+ *   2. Wrap in `{ "0": [...] }` — Anchor 0.31's TS coder uses the
+ *      positional key for unnamed tuple-struct fields.
  */
-export function numberFromU64(n: anchor.BN | number | bigint): [anchor.BN, anchor.BN, anchor.BN, anchor.BN] {
+const NUMBER_DENOM = new anchor.BN("1000000000000"); // 1e12
+
+export function numberFromU64(n: anchor.BN | number | bigint): { "0": [anchor.BN, anchor.BN, anchor.BN, anchor.BN] } {
   const bn =
     typeof n === "number"
       ? new anchor.BN(n)
       : typeof n === "bigint"
       ? new anchor.BN(n.toString())
       : n;
-  return [bn, new anchor.BN(0), new anchor.BN(0), new anchor.BN(0)];
+  const scaled = bn.mul(NUMBER_DENOM);
+  return { "0": [scaled, new anchor.BN(0), new anchor.BN(0), new anchor.BN(0)] };
 }
 
 // ===== Adapter setup =====
@@ -639,6 +660,7 @@ export async function setupVault(params: SetupVaultParams): Promise<VaultHandles
       tokenMetadataProgram: METADATA_PROGRAM_ID,
     } as any)
     .remainingAccounts(remainingAccounts)
+    .preInstructions([CU_LIMIT_IX])
     .signers([payer, vault])
     .rpc();
 
@@ -814,6 +836,7 @@ export async function setupMarket(params: SetupMarketParams): Promise<MarketHand
       tokenTreasuryFeeSy,
     } as any)
     .remainingAccounts(remainingAccounts)
+    .preInstructions([CU_LIMIT_IX])
     .signers([payer])
     .rpc();
 
@@ -1023,6 +1046,7 @@ export async function setupVaultOverNonsense(
       tokenMetadataProgram: METADATA_PROGRAM_ID,
     } as any)
     .remainingAccounts(remainingAccounts)
+    .preInstructions([CU_LIMIT_IX])
     .signers([payer, vault])
     .rpc();
 
@@ -1113,6 +1137,7 @@ export async function strip(args: StripArgs): Promise<string> {
       yieldPosition: vault.yieldPosition,
     } as any)
     .remainingAccounts(extraAccounts)
+    .preInstructions([CU_LIMIT_IX])
     .signers([depositor])
     .rpc();
 }
@@ -1175,6 +1200,7 @@ export async function merge(args: MergeArgs): Promise<string> {
       yieldPosition: vault.yieldPosition,
     } as any)
     .remainingAccounts(adapterExtraAccountsForVault(sy, vault.vaultPosition))
+    .preInstructions([CU_LIMIT_IX])
     .signers([owner])
     .rpc();
 }
@@ -1224,6 +1250,7 @@ export async function depositLiquidity(args: DepositLiquidityArgs): Promise<stri
       syProgram: adapter.programId,
     } as any)
     .remainingAccounts(adapterExtraAccountsForMarket(sy, market.marketPosition))
+    .preInstructions([CU_LIMIT_IX])
     .signers([depositor])
     .rpc();
 }
@@ -1273,6 +1300,7 @@ export async function withdrawLiquidity(args: WithdrawLiquidityArgs): Promise<st
       syProgram: adapter.programId,
     } as any)
     .remainingAccounts(adapterExtraAccountsForMarket(sy, market.marketPosition))
+    .preInstructions([CU_LIMIT_IX])
     .signers([withdrawer])
     .rpc();
 }
@@ -1310,6 +1338,7 @@ export async function tradePt(args: TradePtArgs): Promise<string> {
       tokenFeeTreasurySy: market.tokenTreasuryFeeSy,
     } as any)
     .remainingAccounts(adapterExtraAccountsForMarket(sy, market.marketPosition))
+    .preInstructions([CU_LIMIT_IX])
     .signers([trader])
     .rpc();
 }
@@ -1632,6 +1661,7 @@ export async function setupVaultOverReentrant(
       tokenMetadataProgram: METADATA_PROGRAM_ID,
     } as any)
     .remainingAccounts(remainingAccounts)
+    .preInstructions([CU_LIMIT_IX])
     .signers([payer, vault])
     .rpc();
 

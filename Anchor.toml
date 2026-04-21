@@ -33,4 +33,15 @@ cluster = "Localnet"
 wallet = "./testkp.json"
 
 [scripts]
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+test = "yarn run mocha --import=tsx --timeout 1000000 tests/**/*.ts"
+
+# Clone the Metaplex Token Metadata program from mainnet into the
+# local test validator — `initialize_vault` invokes it to create PT
+# metadata and it's not part of the bare `solana-test-validator`
+# image. First `anchor test` run with this block present will fetch
+# it from the cluster below.
+[[test.validator.clone]]
+address = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+
+[test.validator]
+url = "https://api.mainnet-beta.solana.com"

@@ -51,6 +51,7 @@ import {
   REENTRANT_MODE_REENTER_ON_WITHDRAW,
   findMintPt,
   findMintYt,
+  CU_LIMIT_IX,
   SyMarketHandles,
   VaultHandles,
   MarketHandles,
@@ -713,6 +714,7 @@ describe("clearstone-core :: reentrancy (runtime mock)", () => {
         .remainingAccounts([
           { pubkey: s.syMarket, isSigner: false, isWritable: false },
         ])
+        .preInstructions([CU_LIMIT_IX])
         .signers([s.depositor])
         .rpc();
       assert.fail("outer strip must be rejected by reentrancy guard");
@@ -751,6 +753,7 @@ describe("clearstone-core :: reentrancy (runtime mock)", () => {
       .remainingAccounts([
         { pubkey: s.syMarket, isSigner: false, isWritable: false },
       ])
+      .preInstructions([CU_LIMIT_IX])
       .signers([s.depositor])
       .rpc();
 
@@ -783,6 +786,7 @@ describe("clearstone-core :: reentrancy (runtime mock)", () => {
         .remainingAccounts([
           { pubkey: s.syMarket, isSigner: false, isWritable: false },
         ])
+        .preInstructions([CU_LIMIT_IX])
         .signers([s.depositor])
         .rpc();
       assert.fail("outer merge must be rejected by reentrancy guard");

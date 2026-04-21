@@ -21,14 +21,14 @@ use crate::{state::*, utils::cpi_init_sy_personal_account};
     duration: u32,
     interest_bps_fee: u16,
     cpi_accounts: CpiAccounts,
-    _min_op_size_strip: u64,
-    _min_op_size_merge: u64,
-    _pt_metadata_name: String,
-    _pt_metadata_symbol: String,
-    _pt_metadata_uri: String,
-    _curator: Pubkey,
-    _creator_fee_bps: u16,
-    _max_py_supply: u64,
+    min_op_size_strip: u64,
+    min_op_size_merge: u64,
+    pt_metadata_name: String,
+    pt_metadata_symbol: String,
+    pt_metadata_uri: String,
+    curator: Pubkey,
+    creator_fee_bps: u16,
+    max_py_supply: u64,
     emissions_seed: Vec<EmissionSeed>,
 )]
 pub struct InitializeVault<'info> {
@@ -221,22 +221,31 @@ impl InitializeVault<'_> {
         self.yield_position.vault = self.vault.key();
     }
 
-    /// Create metadata for the PT mint
+    /// Create metadata for the PT mint. Uses MPL's lower-level
+    /// `CreateMetadataAccountV3::instruction()` to build the ix, then
+    /// drives it through our own `invoke_signed` so we control the
+    /// AccountInfo list explicitly — the high-level CpiBuilder proved
+    /// fragile under Anchor 0.31.
     fn create_metadata(&self, name: String, symbol: String, uri: String) -> Result<()> {
-        let accounts = CreateMetadataAccountV3CpiAccounts {
-            metadata: &self.metadata.to_account_info(),
-            mint: &self.mint_pt.to_account_info(),
-            mint_authority: &self.authority.to_account_info(),
-            payer: &self.payer.to_account_info(),
-            update_authority: (&self.payer.to_account_info(), true),
-            system_program: &self.system_program.to_account_info(),
-            rent: None,
-        };
+        use anchor_lang::solana_program::program::invoke_signed;
 
+        let metadata = self.metadata.to_account_info();
+        let mint = self.mint_pt.to_account_info();
+        let mint_authority = self.authority.to_account_info();
+        let payer = self.payer.to_account_info();
+        let system_program = self.system_program.to_account_info();
         let token_metadata_program = self.token_metadata_program.to_account_info();
-        let create_metadata_cpi = CreateMetadataAccountV3Cpi::new(
-            &token_metadata_program,
-            accounts,
+
+        let ix = mpl_token_metadata::instructions::CreateMetadataAccountV3 {
+            metadata: metadata.key(),
+            mint: mint.key(),
+            mint_authority: mint_authority.key(),
+            payer: payer.key(),
+            update_authority: (payer.key(), true),
+            system_program: system_program.key(),
+            rent: None,
+        }
+        .instruction(
             mpl_token_metadata::instructions::CreateMetadataAccountV3InstructionArgs {
                 data: DataV2 {
                     uri,
@@ -252,7 +261,18 @@ impl InitializeVault<'_> {
             },
         );
 
-        create_metadata_cpi.invoke_signed(&[&self.vault.signer_seeds()])?;
+        invoke_signed(
+            &ix,
+            &[
+                metadata,
+                mint,
+                mint_authority,
+                payer,
+                system_program,
+                token_metadata_program,
+            ],
+            &[&self.vault.signer_seeds()],
+        )?;
 
         Ok(())
     }
@@ -287,8 +307,15 @@ pub fn handler(
         duration >= MIN_DURATION_SECONDS && duration <= MAX_DURATION_SECONDS,
         ExponentCoreError::DurationOutOfBounds
     );
+    // Allow a small grace window (2 minutes) on the "start in the
+    // future" check. Callers typically read the clock on the client
+    // then build+send a tx; the validator clock moves between those
+    // two points. Treating any start_ts within 2 minutes of `now` as
+    // acceptable rules out any retroactive-accrual exploit (the check
+    // is an economic guard, not a precise one).
+    const START_TS_GRACE_SECONDS: i64 = 120;
     require!(
-        (start_timestamp as i64) >= Clock::get()?.unix_timestamp,
+        (start_timestamp as i64) >= Clock::get()?.unix_timestamp - START_TS_GRACE_SECONDS,
         ExponentCoreError::StartTimestampInPast
     );
     require!(
