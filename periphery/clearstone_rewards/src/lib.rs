@@ -43,6 +43,13 @@ pub mod clearstone_rewards {
         f.total_staked = 0;
         f.farms = vec![];
         f.last_update_ts = Clock::get()?.unix_timestamp as u32;
+
+        emit!(FarmStateInitialized {
+            farm_state: f.key(),
+            curator: f.curator,
+            market: f.market,
+            lp_mint: f.lp_mint,
+        });
         Ok(())
     }
 
@@ -73,6 +80,13 @@ pub mod clearstone_rewards {
             accrued_index: Number::ZERO,
         });
 
+        emit!(FarmAdded {
+            farm_state: f.key(),
+            reward_mint: ctx.accounts.reward_mint.key(),
+            reward_escrow: ctx.accounts.reward_escrow.key(),
+            token_rate,
+            expiry_timestamp,
+        });
         Ok(())
     }
 
@@ -81,6 +95,7 @@ pub mod clearstone_rewards {
     /// `accrued_index` up to now.
     pub fn stake_lp(ctx: Context<StakeLp>, amount: u64) -> Result<()> {
         require!(amount > 0, RewardsError::ZeroAmount);
+        require_position_fits(&ctx.accounts.position, &ctx.accounts.farm_state)?;
 
         update_indexes(
             &mut ctx.accounts.farm_state,
@@ -118,6 +133,13 @@ pub mod clearstone_rewards {
             .checked_add(amount)
             .ok_or(RewardsError::Overflow)?;
 
+        emit!(Staked {
+            farm_state: f.key(),
+            owner: ctx.accounts.owner.key(),
+            amount,
+            user_staked: pos.staked_amount,
+            total_staked: f.total_staked,
+        });
         Ok(())
     }
 
@@ -125,6 +147,7 @@ pub mod clearstone_rewards {
     /// the user's claimable buckets are credited before their share drops.
     pub fn unstake_lp(ctx: Context<UnstakeLp>, amount: u64) -> Result<()> {
         require!(amount > 0, RewardsError::ZeroAmount);
+        require_position_fits(&ctx.accounts.position, &ctx.accounts.farm_state)?;
 
         update_indexes(
             &mut ctx.accounts.farm_state,
@@ -160,6 +183,13 @@ pub mod clearstone_rewards {
             ctx.accounts.lp_mint.decimals,
         )?;
 
+        emit!(Unstaked {
+            farm_state: f.key(),
+            owner: ctx.accounts.owner.key(),
+            amount,
+            user_staked: pos.staked_amount,
+            total_staked: f.total_staked,
+        });
         Ok(())
     }
 
@@ -178,6 +208,7 @@ pub mod clearstone_rewards {
     /// transfer fails; accrual state remains untouched because the
     /// mutation happens before the transfer.
     pub fn claim_farm_emission(ctx: Context<ClaimFarmEmission>) -> Result<()> {
+        require_position_fits(&ctx.accounts.position, &ctx.accounts.farm_state)?;
         update_indexes(
             &mut ctx.accounts.farm_state,
             Clock::get()?.unix_timestamp as u32,
@@ -221,8 +252,91 @@ pub mod clearstone_rewards {
             ctx.accounts.reward_mint.decimals,
         )?;
 
+        emit!(EmissionClaimed {
+            farm_state: ctx.accounts.farm_state.key(),
+            owner: ctx.accounts.owner.key(),
+            reward_mint: ctx.accounts.reward_mint.key(),
+            amount: claimable,
+        });
         Ok(())
     }
+
+    /// Curator tops up the reward escrow for an existing farm. Pure SPL
+    /// transfer from the curator's token account to the farm_state-owned
+    /// ATA; no accrual state is touched.
+    ///
+    /// We intentionally don't bump `token_rate` here — rate changes are a
+    /// separate concern. refill_farm only adds liquidity for claims; if
+    /// the curator wants to extend/shorten the stream they'd need a
+    /// dedicated `set_farm_rate` ix (not in scope).
+    pub fn refill_farm(ctx: Context<RefillFarm>, amount: u64) -> Result<()> {
+        require!(amount > 0, RewardsError::ZeroAmount);
+        require!(
+            ctx.accounts
+                .farm_state
+                .farms
+                .iter()
+                .any(|f| f.reward_mint == ctx.accounts.reward_mint.key()),
+            RewardsError::FarmNotFound
+        );
+
+        transfer_checked(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.reward_src.to_account_info(),
+                    mint: ctx.accounts.reward_mint.to_account_info(),
+                    to: ctx.accounts.reward_escrow.to_account_info(),
+                    authority: ctx.accounts.curator.to_account_info(),
+                },
+            ),
+            amount,
+            ctx.accounts.reward_mint.decimals,
+        )?;
+
+        emit!(FarmRefilled {
+            farm_state: ctx.accounts.farm_state.key(),
+            reward_mint: ctx.accounts.reward_mint.key(),
+            amount,
+        });
+        Ok(())
+    }
+
+    /// Grow a stake position to fit the current farm count.
+    ///
+    /// Stake positions are sized at first-stake for whatever `farms.len()`
+    /// is at that moment. When the curator adds new farms afterwards the
+    /// position is too small to hold the extra per-farm trackers, and
+    /// stake_lp / unstake_lp / claim_farm_emission would panic on
+    /// serialization. This ix lets the owner re-size first; the handler
+    /// body is empty because Anchor's `realloc` attribute does the work
+    /// (and tops up rent from `owner`).
+    pub fn realloc_stake_position(ctx: Context<ReallocStakePosition>) -> Result<()> {
+        emit!(StakePositionReallocated {
+            farm_state: ctx.accounts.farm_state.key(),
+            owner: ctx.accounts.owner.key(),
+            n_farms: ctx.accounts.farm_state.farms.len() as u16,
+        });
+        Ok(())
+    }
+}
+
+// -------------- Helpers --------------
+
+/// Gate every accrual-touching ix on the position being large enough
+/// for `farm_state.farms.len()` trackers. Prevents serialize panics
+/// from settle_user's push path when the position is stale, and points
+/// the user at `realloc_stake_position`.
+fn require_position_fits(
+    position: &Account<StakePosition>,
+    farm_state: &Account<FarmState>,
+) -> Result<()> {
+    let required = StakePosition::space(farm_state.farms.len());
+    require!(
+        position.to_account_info().data_len() >= required,
+        RewardsError::StalePosition
+    );
+    Ok(())
 }
 
 // -------------- Accrual math --------------
@@ -332,6 +446,65 @@ pub struct PerFarmTracker {
 
 impl PerFarmTracker {
     pub const SIZE: usize = Number::SIZEOF + 8;
+}
+
+// -------------- Events --------------
+
+#[event]
+pub struct FarmStateInitialized {
+    pub farm_state: Pubkey,
+    pub curator: Pubkey,
+    pub market: Pubkey,
+    pub lp_mint: Pubkey,
+}
+
+#[event]
+pub struct FarmAdded {
+    pub farm_state: Pubkey,
+    pub reward_mint: Pubkey,
+    pub reward_escrow: Pubkey,
+    pub token_rate: u64,
+    pub expiry_timestamp: u32,
+}
+
+#[event]
+pub struct Staked {
+    pub farm_state: Pubkey,
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub user_staked: u64,
+    pub total_staked: u64,
+}
+
+#[event]
+pub struct Unstaked {
+    pub farm_state: Pubkey,
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub user_staked: u64,
+    pub total_staked: u64,
+}
+
+#[event]
+pub struct EmissionClaimed {
+    pub farm_state: Pubkey,
+    pub owner: Pubkey,
+    pub reward_mint: Pubkey,
+    pub amount: u64,
+}
+
+#[event]
+pub struct FarmRefilled {
+    pub farm_state: Pubkey,
+    pub reward_mint: Pubkey,
+    pub amount: u64,
+}
+
+#[event]
+pub struct StakePositionReallocated {
+    pub farm_state: Pubkey,
+    pub owner: Pubkey,
+    pub n_farms: u16,
 }
 
 // -------------- Accounts --------------
@@ -511,6 +684,53 @@ pub struct ClaimFarmEmission<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
+#[derive(Accounts)]
+pub struct RefillFarm<'info> {
+    pub curator: Signer<'info>,
+
+    #[account(has_one = curator)]
+    pub farm_state: Box<Account<'info, FarmState>>,
+
+    pub reward_mint: InterfaceAccount<'info, Mint>,
+
+    /// Curator's source of reward tokens.
+    #[account(mut, token::mint = reward_mint, token::authority = curator)]
+    pub reward_src: InterfaceAccount<'info, TokenAccount>,
+
+    /// Farm-state-owned ATA for this reward mint. Must be the one
+    /// wired up in `add_farm` (same ATA constraint).
+    #[account(
+        mut,
+        associated_token::mint = reward_mint,
+        associated_token::authority = farm_state,
+        associated_token::token_program = token_program,
+    )]
+    pub reward_escrow: InterfaceAccount<'info, TokenAccount>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct ReallocStakePosition<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    pub farm_state: Box<Account<'info, FarmState>>,
+
+    #[account(
+        mut,
+        seeds = [STAKE_POSITION_SEED, farm_state.key().as_ref(), owner.key().as_ref()],
+        bump,
+        has_one = owner,
+        realloc = StakePosition::space(farm_state.farms.len()),
+        realloc::payer = owner,
+        realloc::zero = false,
+    )]
+    pub position: Box<Account<'info, StakePosition>>,
+
+    pub system_program: Program<'info, System>,
+}
+
 // -------------- Errors --------------
 
 #[error_code]
@@ -529,4 +749,6 @@ pub enum RewardsError {
     NotYetImplemented,
     #[msg("Farm not found for the given reward mint")]
     FarmNotFound,
+    #[msg("Stake position is too small for current farm count; call realloc_stake_position")]
+    StalePosition,
 }

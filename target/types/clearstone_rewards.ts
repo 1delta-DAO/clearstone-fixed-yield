@@ -191,6 +191,107 @@ export type ClearstoneRewards = {
       "args": []
     },
     {
+      "name": "reallocStakePosition",
+      "docs": [
+        "Grow a stake position to fit the current farm count.",
+        "",
+        "Stake positions are sized at first-stake for whatever `farms.len()`",
+        "is at that moment. When the curator adds new farms afterwards the",
+        "position is too small to hold the extra per-farm trackers, and",
+        "stake_lp / unstake_lp / claim_farm_emission would panic on",
+        "serialization. This ix lets the owner re-size first; the handler",
+        "body is empty because Anchor's `realloc` attribute does the work",
+        "(and tops up rent from `owner`)."
+      ],
+      "discriminator": [
+        102,
+        40,
+        210,
+        22,
+        204,
+        59,
+        71,
+        25
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "farmState"
+        },
+        {
+          "name": "position",
+          "writable": true
+        },
+        {
+          "name": "systemProgram"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "refillFarm",
+      "docs": [
+        "Curator tops up the reward escrow for an existing farm. Pure SPL",
+        "transfer from the curator's token account to the farm_state-owned",
+        "ATA; no accrual state is touched.",
+        "",
+        "We intentionally don't bump `token_rate` here — rate changes are a",
+        "separate concern. refill_farm only adds liquidity for claims; if",
+        "the curator wants to extend/shorten the stream they'd need a",
+        "dedicated `set_farm_rate` ix (not in scope)."
+      ],
+      "discriminator": [
+        195,
+        225,
+        229,
+        188,
+        146,
+        222,
+        201,
+        197
+      ],
+      "accounts": [
+        {
+          "name": "curator",
+          "signer": true
+        },
+        {
+          "name": "farmState"
+        },
+        {
+          "name": "rewardMint"
+        },
+        {
+          "name": "rewardSrc",
+          "docs": [
+            "Curator's source of reward tokens."
+          ],
+          "writable": true
+        },
+        {
+          "name": "rewardEscrow",
+          "docs": [
+            "Farm-state-owned ATA for this reward mint. Must be the one",
+            "wired up in `add_farm` (same ATA constraint)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "stakeLp",
       "docs": [
         "Transfer LP into the program's escrow and bump the staker's balance.",
@@ -332,6 +433,99 @@ export type ClearstoneRewards = {
       ]
     }
   ],
+  "events": [
+    {
+      "name": "emissionClaimed",
+      "discriminator": [
+        75,
+        85,
+        135,
+        20,
+        99,
+        229,
+        53,
+        24
+      ]
+    },
+    {
+      "name": "farmAdded",
+      "discriminator": [
+        146,
+        58,
+        215,
+        97,
+        210,
+        124,
+        125,
+        38
+      ]
+    },
+    {
+      "name": "farmRefilled",
+      "discriminator": [
+        95,
+        175,
+        114,
+        32,
+        234,
+        93,
+        13,
+        250
+      ]
+    },
+    {
+      "name": "farmStateInitialized",
+      "discriminator": [
+        77,
+        191,
+        17,
+        250,
+        127,
+        151,
+        130,
+        190
+      ]
+    },
+    {
+      "name": "stakePositionReallocated",
+      "discriminator": [
+        35,
+        115,
+        147,
+        73,
+        186,
+        241,
+        197,
+        191
+      ]
+    },
+    {
+      "name": "staked",
+      "discriminator": [
+        11,
+        146,
+        45,
+        205,
+        230,
+        58,
+        213,
+        240
+      ]
+    },
+    {
+      "name": "unstaked",
+      "discriminator": [
+        27,
+        179,
+        156,
+        215,
+        47,
+        71,
+        195,
+        7
+      ]
+    }
+  ],
   "errors": [
     {
       "code": 6000,
@@ -367,9 +561,38 @@ export type ClearstoneRewards = {
       "code": 6006,
       "name": "farmNotFound",
       "msg": "Farm not found for the given reward mint"
+    },
+    {
+      "code": 6007,
+      "name": "stalePosition",
+      "msg": "Stake position is too small for current farm count; call realloc_stake_position"
     }
   ],
   "types": [
+    {
+      "name": "emissionClaimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "farmState",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "rewardMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
     {
       "name": "farm",
       "type": {
@@ -398,6 +621,54 @@ export type ClearstoneRewards = {
                 "name": "number"
               }
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "farmAdded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "farmState",
+            "type": "pubkey"
+          },
+          {
+            "name": "rewardMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "rewardEscrow",
+            "type": "pubkey"
+          },
+          {
+            "name": "tokenRate",
+            "type": "u64"
+          },
+          {
+            "name": "expiryTimestamp",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "farmRefilled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "farmState",
+            "type": "pubkey"
+          },
+          {
+            "name": "rewardMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
           }
         ]
       }
@@ -440,6 +711,30 @@ export type ClearstoneRewards = {
                 }
               }
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "farmStateInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "farmState",
+            "type": "pubkey"
+          },
+          {
+            "name": "curator",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "lpMint",
+            "type": "pubkey"
           }
         ]
       }
@@ -507,6 +802,82 @@ export type ClearstoneRewards = {
                 }
               }
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "stakePositionReallocated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "farmState",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "nFarms",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "staked",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "farmState",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "userStaked",
+            "type": "u64"
+          },
+          {
+            "name": "totalStaked",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unstaked",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "farmState",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "userStaked",
+            "type": "u64"
+          },
+          {
+            "name": "totalStaked",
+            "type": "u64"
           }
         ]
       }

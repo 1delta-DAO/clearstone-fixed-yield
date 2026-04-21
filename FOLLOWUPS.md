@@ -106,13 +106,17 @@ publish the hash, pin into the audit tag.
 
 ### clearstone_rewards
 
-- **`refill_farm`**: curator tops up the reward ATA after initial
-  funding. 3-line SPL transfer wrapping — intentionally deferred to the
-  first real integration.
-- **`StakePosition` realloc**: the `per_farm` vec grows on every
-  stake/unstake as new farms are added; account space was allocated for
-  `n_farms` at init and isn't realloc'd. Audit blocker if farms are
-  added after positions exist.
+- ~~**`refill_farm`**~~: landed. Curator-gated (`has_one = curator`) SPL
+  transfer from the curator's token account to the farm-state-owned
+  reward ATA. Guards against an unknown `reward_mint` via explicit
+  farm-lookup.
+- ~~**`StakePosition` realloc`**~~: landed. Added `realloc_stake_position`
+  (owner-only, Anchor `realloc` attribute with
+  `StakePosition::space(farm_state.farms.len())`). Every
+  accrual-touching ix (`stake_lp` / `unstake_lp` / `claim_farm_emission`)
+  now front-guards via `require_position_fits` — fails fast with
+  `StalePosition` if the account is too small for the current farm
+  count, pointing users at the realloc ix.
 - **Farm decommissioning**: no path to remove a finished farm. Not
   strictly needed — farms past their `expiry_timestamp` stop accruing
   and can be left in place — but it grows `FarmState` monotonically.
@@ -122,23 +126,46 @@ publish the hash, pin into the audit tag.
 
 ### clearstone_curator
 
-- **`rebalance`**: still returns `NotYetImplemented`. This is the heart
-  of MetaMorpho: walk `allocations`, compare `deployed_base` vs target,
-  CPI-deposit or CPI-withdraw against each core market. Needs full CPI
-  plumbing to `clearstone_core::market_two_deposit_liquidity` /
-  `_withdraw_liquidity`.
-- **Performance-fee harvesting**: `fee_bps` stored but not applied.
-  Needs a periodic `harvest` ix that measures `total_assets` growth
-  since last harvest and mints curator shares equal to the fee.
-- **`total_assets` reconciliation**: today `deposit` / `withdraw` track
-  1:1 with idle base. Once `rebalance` is in, `total_assets` must track
-  base-equivalent of all allocations (read PT valuations from markets).
-- **`allocations` realloc**: vec grows without bound; `set_allocations`
-  realloc path needed.
+- ~~**`rebalance`**~~: landed as two primitives instead of one fat ix.
+  `reallocate_to_market` does 3 inner CPIs (adapter.mint_sy →
+  core.trade_pt buy → core.deposit_liquidity) to push base from
+  `base_escrow` into one market's LP, updating `allocations[i].deployed_base`.
+  `reallocate_from_market` mirrors it (withdraw_liquidity →
+  trade_pt sell → redeem_sy) to pull back out. The vault PDA signs all
+  inner CPIs via the cached bump on `CuratorVault`. Curator authorizes
+  the outer ix.  The higher-level "walk all allocations and rebalance
+  to weights" loop lives off-chain; it just dispatches these two.
+- ~~**Performance-fee harvesting**~~: landed as `harvest_fees`. Takes
+  curator-attested `current_total_assets`, updates the stored total,
+  computes `gain = max(0, current − last_harvest_total_assets)`, fees
+  it at `fee_bps`, and mints dilutive shares to the curator's
+  `UserPosition` via the Blue-standard formula
+  `X = S · fee / (A − fee)` so existing holders' real claim drops by
+  exactly `fee`. Snapshots `last_harvest_total_assets` for the next
+  cycle. Bootstrapping case (S = 0) mints shares 1:1.
+- **`total_assets` reconciliation**: still open. `reallocate_to/from_market`
+  update `deployed_base` by caller-supplied deltas; PT/LP valuations
+  aren't read from market state on-chain. `harvest_fees` trusts the
+  curator's `current_total_assets`. A future `mark_to_market` ix would
+  walk allocations, CPI-read each market's `pt_redemption_rate` + LP
+  supply, and compute the base-equivalent without any off-chain
+  attestation. Audit blocker for trustless fee accrual; fine for a
+  curator-attested MVP.
+- ~~**`allocations` realloc**~~: landed. `SetAllocations` now takes
+  `allocations` as an `#[instruction(...)]` param and Anchor resizes
+  `CuratorVault` to `CuratorVault::space(allocations.len())` with
+  `realloc::payer = curator` — curator pays rent for growth, and the
+  vec can shrink too.
 
 ### Both
 
-- No events on state-changing ixns.
+- ~~No events on state-changing ixns~~: landed.
+  [clearstone_curator](periphery/clearstone_curator/src/lib.rs) emits
+  `VaultInitialized` / `Deposited` / `Withdrawn` / `AllocationsSet`.
+  [clearstone_rewards](periphery/clearstone_rewards/src/lib.rs) emits
+  `FarmStateInitialized` / `FarmAdded` / `Staked` / `Unstaked` /
+  `EmissionClaimed` / `FarmRefilled` / `StakePositionReallocated`.
+  Plain `emit!` (not `emit_cpi!`) — no extra account-plumbing cost.
 - No tests. Once the gaps above are filled, add tests parallel to
   core's virtualization_tests.
 
@@ -190,24 +217,31 @@ at runtime (blocked by the M6 harness). Known gaps documented inline:
   curators.
 - **No supply cap / emissions**: out of scope for this reference.
 
-## M4 — Periphery programs: partial
+## ✅ M4 — Periphery programs: router (**RESOLVED**)
 
-**Router landed** — 3 of 12 wrappers written as template:
-[periphery/clearstone_router](periphery/clearstone_router/src/lib.rs).
-Covers `wrapper_strip` (base → PT+YT via `adapter.mint_sy` →
-`core.strip`), `wrapper_merge` (PT+YT → base via `core.merge` →
-`adapter.redeem_sy`), and `wrapper_buy_pt` (base → PT via
-`adapter.mint_sy` → `core.trade_pt` buy). Registered in
-`Anchor.toml`, builds with the workspace. Program ID
-`DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW`.
+All 12 wrappers landed in
+[periphery/clearstone_router](periphery/clearstone_router/src/lib.rs):
 
-**Still open:** 9 remaining wrappers
-(`wrapper_provide_liquidity`, `wrapper_sell_pt`, `wrapper_buy_yt`,
-`wrapper_sell_yt`, `wrapper_collect_interest`,
-`wrapper_withdraw_liquidity`, `wrapper_withdraw_liquidity_classic`,
-`wrapper_provide_liquidity_base`, `wrapper_provide_liquidity_classic`).
-Each follows the pattern: outer Accounts = union of inner-ix accounts;
-handler stitches CPIs. Template is proven.
+- **Single-SY-CPI** (previously landed): `wrapper_strip`,
+  `wrapper_merge`, `wrapper_buy_pt`.
+- **Sell/buy wrappers**: `wrapper_sell_pt` (trade_pt sell →
+  redeem_sy), `wrapper_buy_yt` (mint_sy → core.buy_yt),
+  `wrapper_sell_yt` (core.sell_yt → redeem_sy).
+- **Interest / liquidity**: `wrapper_collect_interest`
+  (collect_interest → redeem_sy), `wrapper_provide_liquidity`
+  (base+PT → mint_sy → deposit_liquidity),
+  `wrapper_withdraw_liquidity` (withdraw_liquidity → redeem_sy, PT
+  returned).
+- **Classic passthroughs**: `wrapper_provide_liquidity_classic` and
+  `wrapper_withdraw_liquidity_classic` — same account layouts as their
+  non-classic counterparts, skip the adapter leg for users already
+  holding SY. Kept as named variants for IDL stability.
+- **Base-only LP**: `wrapper_provide_liquidity_base`
+  (mint_sy → trade_pt buy → deposit_liquidity).
+
+Shared `redeem_sy_cpi` helper takes AccountInfos directly — keeps the
+SY→base drain step identical across the four wrappers that end with
+it. `anchor build` green.
 
 **Vault-level emissions** — kept on `Vault.emissions: Vec<EmissionInfo>`
 per §10 Q4. The admin-side `add_emission` was deleted in M4; emissions

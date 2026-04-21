@@ -14,10 +14,17 @@ cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+idl-build = [
+    "anchor-lang/idl-build",
+    "anchor-spl/idl-build",
+    "clearstone_core/idl-build",
+    "generic_exchange_rate_sy/idl-build",
+]
 
 [dependencies]
 anchor-lang = { version = "0.31.1", features = ["event-cpi", "init-if-needed"] }
 anchor-spl = { version = "0.31.1" }
+clearstone_core = { path = "../../programs/clearstone_core", features = ["cpi"] }
+generic_exchange_rate_sy = { path = "../../reference_adapters/generic_exchange_rate_sy", features = ["cpi"] }
 precise_number = { path = "../../libraries/precise_number" }
 getrandom = { version = "=0.2.10", features = ["custom"] }

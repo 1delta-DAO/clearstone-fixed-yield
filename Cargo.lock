@@ -820,6 +820,8 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
+ "clearstone_core",
+ "generic_exchange_rate_sy",
  "getrandom 0.2.10",
  "precise_number",
 ]

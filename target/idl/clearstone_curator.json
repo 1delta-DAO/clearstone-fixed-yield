@@ -72,6 +72,70 @@
       ]
     },
     {
+      "name": "harvest_fees",
+      "docs": [
+        "Mint performance-fee shares to the curator's UserPosition.",
+        "",
+        "`current_total_assets` is the curator's attested mark-to-market",
+        "value of (idle_base + Σ deployed allocations). The ix:",
+        "1. Updates `vault.total_assets = current_total_assets`.",
+        "2. Computes `gain = max(0, current - last_harvest_total_assets)`.",
+        "3. Fee in asset terms = `gain * fee_bps / 10_000`.",
+        "4. Converts to shares via the Blue-standard formula",
+        "`X = S * fee / (A - fee)` — mints X shares to the curator's",
+        "UserPosition, bumping `total_shares` by X but not",
+        "`total_assets` (other holders' real claim is diluted by",
+        "exactly `fee`).",
+        "5. Snapshots `last_harvest_total_assets = current_total_assets`.",
+        "",
+        "Trust: curator vouches for `current_total_assets`. Mark-to-market",
+        "reconciliation from on-chain market state is tracked separately",
+        "in FOLLOWUPS.md."
+      ],
+      "discriminator": [
+        90,
+        149,
+        158,
+        241,
+        163,
+        186,
+        155,
+        202
+      ],
+      "accounts": [
+        {
+          "name": "curator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "curator_position",
+          "docs": [
+            "Curator's UserPosition, init_if_needed so the first harvest on a",
+            "fresh vault doesn't require an out-of-band init. Shares from the",
+            "fee land here."
+          ],
+          "writable": true
+        },
+        {
+          "name": "system_program"
+        },
+        {
+          "name": "rent"
+        }
+      ],
+      "args": [
+        {
+          "name": "current_total_assets",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "initialize_vault",
       "docs": [
         "Stand up a new CuratorVault over `base_mint`. Anyone can call this;",
@@ -126,28 +190,304 @@
       ]
     },
     {
-      "name": "rebalance",
+      "name": "reallocate_from_market",
+      "docs": [
+        "Pull one allocation back out of its market into idle base.",
+        "Three inner CPIs symmetric to `reallocate_to_market`:",
+        "(1) withdraw_liquidity (LP → PT + SY), (2) trade_pt sell (PT → SY),",
+        "(3) adapter.redeem_sy (SY → base_escrow). Vault PDA signs.",
+        "",
+        "`base_out_expected` is the curator's accounting of how much base",
+        "comes back. We use it to decrement `deployed_base` and",
+        "`total_assets` — the caller should set it from the actual",
+        "post-CPI balance delta on `base_escrow` (curator reads off-chain",
+        "and passes the value in). A stricter reconciliation would read",
+        "`base_escrow.amount` before and after; we skip that to keep the",
+        "CU budget manageable."
+      ],
       "discriminator": [
-        108,
-        158,
-        77,
-        9,
-        210,
-        52,
-        88,
-        62
+        174,
+        224,
+        195,
+        119,
+        241,
+        134,
+        149,
+        235
       ],
       "accounts": [
         {
           "name": "curator",
+          "writable": true,
           "signer": true
         },
         {
           "name": "vault",
           "writable": true
+        },
+        {
+          "name": "base_mint"
+        },
+        {
+          "name": "base_escrow",
+          "writable": true
+        },
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "sy_mint",
+          "writable": true
+        },
+        {
+          "name": "adapter_base_vault",
+          "writable": true
+        },
+        {
+          "name": "vault_sy_ata",
+          "writable": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "market_escrow_pt",
+          "writable": true
+        },
+        {
+          "name": "market_escrow_sy",
+          "writable": true
+        },
+        {
+          "name": "token_fee_treasury_sy",
+          "writable": true
+        },
+        {
+          "name": "market_alt"
+        },
+        {
+          "name": "mint_pt"
+        },
+        {
+          "name": "mint_lp",
+          "writable": true
+        },
+        {
+          "name": "vault_pt_ata",
+          "writable": true
+        },
+        {
+          "name": "vault_lp_ata",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "allocation_index",
+          "type": "u16"
+        },
+        {
+          "name": "lp_in",
+          "type": "u64"
+        },
+        {
+          "name": "min_pt_out",
+          "type": "u64"
+        },
+        {
+          "name": "min_sy_out",
+          "type": "u64"
+        },
+        {
+          "name": "pt_sell_amount",
+          "type": "u64"
+        },
+        {
+          "name": "min_sy_for_pt",
+          "type": "i64"
+        },
+        {
+          "name": "sy_redeem_amount",
+          "type": "u64"
+        },
+        {
+          "name": "base_out_expected",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "reallocate_to_market",
+      "docs": [
+        "Deploy idle base into one allocation's market as LP.",
+        "",
+        "Three inner CPIs: (1) adapter.mint_sy pulls base from base_escrow",
+        "and mints SY to the vault's SY ATA; (2) core.trade_pt spends part",
+        "of that SY on PT (landing in vault's PT ATA); (3) core.deposit_liquidity",
+        "pairs (PT + SY) into LP. The vault PDA is the signer for all three",
+        "via its cached bump; the curator authorizes the outer ix.",
+        "",
+        "`deployed_base` tracks the base the vault committed — not",
+        "mark-to-market. Use `harvest_fees` (with a curator-attested total)",
+        "to fold appreciation back into `total_assets`. See FOLLOWUPS.md for",
+        "the full mark-to-market reconciliation story."
+      ],
+      "discriminator": [
+        130,
+        80,
+        205,
+        204,
+        74,
+        164,
+        33,
+        99
+      ],
+      "accounts": [
+        {
+          "name": "curator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "base_mint"
+        },
+        {
+          "name": "base_escrow",
+          "docs": [
+            "Vault's base escrow — mint_sy pulls base from here."
+          ],
+          "writable": true
+        },
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "sy_mint",
+          "writable": true
+        },
+        {
+          "name": "adapter_base_vault",
+          "docs": [
+            "Adapter's base pool for the SY market."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vault_sy_ata",
+          "docs": [
+            "Vault-PDA-owned SY ATA."
+          ],
+          "writable": true
+        },
+        {
+          "name": "market",
+          "docs": [
+            "allocation entry by pubkey in the handler."
+          ],
+          "writable": true
+        },
+        {
+          "name": "market_escrow_pt",
+          "writable": true
+        },
+        {
+          "name": "market_escrow_sy",
+          "writable": true
+        },
+        {
+          "name": "token_fee_treasury_sy",
+          "writable": true
+        },
+        {
+          "name": "market_alt"
+        },
+        {
+          "name": "mint_pt"
+        },
+        {
+          "name": "mint_lp",
+          "writable": true
+        },
+        {
+          "name": "vault_pt_ata",
+          "docs": [
+            "Vault-PDA-owned PT ATA."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vault_lp_ata",
+          "docs": [
+            "Vault-PDA-owned LP ATA."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        },
+        {
+          "name": "associated_token_program"
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "allocation_index",
+          "type": "u16"
+        },
+        {
+          "name": "base_in",
+          "type": "u64"
+        },
+        {
+          "name": "pt_buy_amount",
+          "type": "u64"
+        },
+        {
+          "name": "max_sy_in",
+          "type": "i64"
+        },
+        {
+          "name": "pt_intent",
+          "type": "u64"
+        },
+        {
+          "name": "sy_intent",
+          "type": "u64"
+        },
+        {
+          "name": "min_lp_out",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "set_allocations",
@@ -169,6 +509,7 @@
       "accounts": [
         {
           "name": "curator",
+          "writable": true,
           "signer": true
         },
         {
@@ -265,6 +606,19 @@
       ]
     },
     {
+      "name": "MarketTwo",
+      "discriminator": [
+        212,
+        4,
+        132,
+        126,
+        169,
+        121,
+        121,
+        20
+      ]
+    },
+    {
       "name": "UserPosition",
       "discriminator": [
         251,
@@ -275,6 +629,99 @@
         234,
         17,
         27
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AllocationsSet",
+      "discriminator": [
+        166,
+        149,
+        35,
+        205,
+        236,
+        62,
+        151,
+        230
+      ]
+    },
+    {
+      "name": "Deposited",
+      "discriminator": [
+        111,
+        141,
+        26,
+        45,
+        161,
+        35,
+        100,
+        57
+      ]
+    },
+    {
+      "name": "FeesHarvested",
+      "discriminator": [
+        30,
+        236,
+        182,
+        190,
+        77,
+        254,
+        76,
+        10
+      ]
+    },
+    {
+      "name": "ReallocatedFromMarket",
+      "discriminator": [
+        165,
+        106,
+        81,
+        210,
+        155,
+        61,
+        230,
+        5
+      ]
+    },
+    {
+      "name": "ReallocatedToMarket",
+      "discriminator": [
+        173,
+        251,
+        254,
+        54,
+        222,
+        96,
+        45,
+        14
+      ]
+    },
+    {
+      "name": "VaultInitialized",
+      "discriminator": [
+        180,
+        43,
+        207,
+        2,
+        18,
+        71,
+        3,
+        75
+      ]
+    },
+    {
+      "name": "Withdrawn",
+      "discriminator": [
+        20,
+        89,
+        223,
+        198,
+        194,
+        124,
+        219,
+        13
       ]
     }
   ],
@@ -318,6 +765,21 @@
       "code": 6007,
       "name": "InsufficientAssets",
       "msg": "Vault escrow has insufficient base liquid; curator must rebalance"
+    },
+    {
+      "code": 6008,
+      "name": "AllocationIndexOutOfRange",
+      "msg": "Allocation index out of range for this vault"
+    },
+    {
+      "code": 6009,
+      "name": "AllocationMarketMismatch",
+      "msg": "Market passed does not match the allocation entry"
+    },
+    {
+      "code": 6010,
+      "name": "AllocationCapExceeded",
+      "msg": "Allocation cap would be exceeded"
     }
   ],
   "types": [
@@ -358,6 +820,131 @@
       }
     },
     {
+      "name": "AllocationsSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "curator",
+            "type": "pubkey"
+          },
+          {
+            "name": "n_allocations",
+            "type": "u16"
+          },
+          {
+            "name": "total_weight_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CpiAccounts",
+      "docs": [
+        "Account lists for validating CPI calls to the SY program"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "get_sy_state",
+            "docs": [
+              "Fetch SY state"
+            ],
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "CpiInterfaceContext"
+                }
+              }
+            }
+          },
+          {
+            "name": "deposit_sy",
+            "docs": [
+              "Deposit SY into personal account owned by vault"
+            ],
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "CpiInterfaceContext"
+                }
+              }
+            }
+          },
+          {
+            "name": "withdraw_sy",
+            "docs": [
+              "Withdraw SY from personal account owned by vault"
+            ],
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "CpiInterfaceContext"
+                }
+              }
+            }
+          },
+          {
+            "name": "claim_emission",
+            "docs": [
+              "Settle rewards for vault to accounts owned by the vault"
+            ],
+            "type": {
+              "vec": {
+                "vec": {
+                  "defined": {
+                    "name": "CpiInterfaceContext"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "name": "get_position_state",
+            "docs": [
+              "Get personal yield position"
+            ],
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "CpiInterfaceContext"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "CpiInterfaceContext",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "alt_index",
+            "docs": [
+              "Address-lookup-table index"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "is_signer",
+            "type": "bool"
+          },
+          {
+            "name": "is_writable",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
       "name": "CuratorVault",
       "type": {
         "kind": "struct",
@@ -377,9 +964,12 @@
           {
             "name": "total_assets",
             "docs": [
-              "Accounting totals. These track base tokens held by the curator —",
-              "which may be split between `base_escrow` (idle) and the underlying",
-              "core markets (deployed). `rebalance` keeps them reconciled."
+              "Accounting totals. `total_assets` tracks base tokens held across",
+              "`base_escrow` (idle) + each allocation's `deployed_base` (deployed",
+              "into core markets). Updated by deposit/withdraw/reallocate_* and",
+              "— when PT/LP valuations change — by `harvest_fees` (curator-",
+              "supplied mark-to-market; see FOLLOWUPS.md total_assets",
+              "reconciliation caveat)."
             ],
             "type": "u64"
           },
@@ -395,6 +985,14 @@
             "type": "u16"
           },
           {
+            "name": "last_harvest_total_assets",
+            "docs": [
+              "Snapshot of `total_assets` at the last `harvest_fees`. Gain since",
+              "this snapshot is what the fee applies to."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "allocations",
             "type": {
               "vec": {
@@ -403,6 +1001,400 @@
                 }
               }
             }
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "Bump cache — needed because vault PDA signs every inner CPI in",
+              "reallocate_to_market / reallocate_from_market."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Deposited",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_base",
+            "type": "u64"
+          },
+          {
+            "name": "shares_out",
+            "type": "u64"
+          },
+          {
+            "name": "total_assets",
+            "type": "u64"
+          },
+          {
+            "name": "total_shares",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FeesHarvested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "curator",
+            "type": "pubkey"
+          },
+          {
+            "name": "gain",
+            "type": "u64"
+          },
+          {
+            "name": "fee_in_assets",
+            "type": "u64"
+          },
+          {
+            "name": "shares_minted",
+            "type": "u64"
+          },
+          {
+            "name": "total_assets",
+            "type": "u64"
+          },
+          {
+            "name": "total_shares",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LiquidityNetBalanceLimits",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "window_start_timestamp",
+            "type": "u32"
+          },
+          {
+            "name": "window_start_net_balance",
+            "type": "u64"
+          },
+          {
+            "name": "max_net_balance_change_negative_percentage",
+            "docs": [
+              "Maximum allowed negative change in basis points (10000 = 100%)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "max_net_balance_change_positive_percentage",
+            "docs": [
+              "Maximum allowed positive change in basis points (10000 = 100%)",
+              "Using u32 to allow for very large increases (up to ~429,496%)"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "window_duration_seconds",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MarketFinancials",
+      "docs": [
+        "Financial parameters for the market"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "expiration_ts",
+            "docs": [
+              "Expiration timestamp, which is copied from the vault associated with the PT"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pt_balance",
+            "docs": [
+              "Balance of PT in the market",
+              "This amount is tracked separately to prevent bugs from token transfers directly to the market"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "sy_balance",
+            "docs": [
+              "Balance of SY in the market",
+              "This amount is tracked separately to prevent bugs from token transfers directly to the market"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "ln_fee_rate_root",
+            "docs": [
+              "Initial log of fee rate, which decreases over time"
+            ],
+            "type": "f64"
+          },
+          {
+            "name": "last_ln_implied_rate",
+            "docs": [
+              "Last seen log of implied rate (APY) for PT",
+              "Used to maintain continuity of the APY between trades over time"
+            ],
+            "type": "f64"
+          },
+          {
+            "name": "rate_scalar_root",
+            "docs": [
+              "Initial rate scalar, which increases over time"
+            ],
+            "type": "f64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MarketTwo",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "curator",
+            "docs": [
+              "Curator authorized to modify this market's mutable settings.",
+              "Set at init; replaces the global admin-principle whitelist."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "creator_fee_bps",
+            "docs": [
+              "Ceiling committed at init for this market's treasury SY fee.",
+              "Bounded by PROTOCOL_FEE_MAX_BPS at creation, immutable after."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "reentrancy_guard",
+            "docs": [
+              "Non-reentrancy latch. Same semantics as Vault.reentrancy_guard."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "address_lookup_table",
+            "docs": [
+              "Address to ALT"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "mint_pt",
+            "docs": [
+              "Mint of the vault's PT token"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "mint_sy",
+            "docs": [
+              "Mint of the SY program's SY token"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "docs": [
+              "Link to yield-stripping vault"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "mint_lp",
+            "docs": [
+              "Mint for the market's LP tokens"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "token_pt_escrow",
+            "docs": [
+              "Token account that holds PT liquidity"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "token_sy_escrow",
+            "docs": [
+              "Pass-through token account for SY moving from the depositor to the SY program"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "token_fee_treasury_sy",
+            "docs": [
+              "Token account that holds SY fees from trade_pt"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_treasury_sy_bps",
+            "docs": [
+              "Fee treasury SY BPS"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "self_address",
+            "docs": [
+              "Authority for CPI calls owned by the market struct"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "signer_bump",
+            "docs": [
+              "Bump for signing the PDA"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                1
+              ]
+            }
+          },
+          {
+            "name": "status_flags",
+            "type": "u8"
+          },
+          {
+            "name": "sy_program",
+            "docs": [
+              "Link to the SY program ID"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "financials",
+            "type": {
+              "defined": {
+                "name": "MarketFinancials"
+              }
+            }
+          },
+          {
+            "name": "max_lp_supply",
+            "type": "u64"
+          },
+          {
+            "name": "cpi_accounts",
+            "docs": [
+              "Record of CPI accounts"
+            ],
+            "type": {
+              "defined": {
+                "name": "CpiAccounts"
+              }
+            }
+          },
+          {
+            "name": "is_current_flash_swap",
+            "type": "bool"
+          },
+          {
+            "name": "liquidity_net_balance_limits",
+            "type": {
+              "defined": {
+                "name": "LiquidityNetBalanceLimits"
+              }
+            }
+          },
+          {
+            "name": "seed_id",
+            "docs": [
+              "Unique seed id for the market"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                1
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReallocatedFromMarket",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "allocation_index",
+            "type": "u16"
+          },
+          {
+            "name": "base_out",
+            "type": "u64"
+          },
+          {
+            "name": "deployed_base",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReallocatedToMarket",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "allocation_index",
+            "type": "u16"
+          },
+          {
+            "name": "base_in",
+            "type": "u64"
+          },
+          {
+            "name": "deployed_base",
+            "type": "u64"
           }
         ]
       }
@@ -422,6 +1414,62 @@
           },
           {
             "name": "shares",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VaultInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "curator",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Withdrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "shares_in",
+            "type": "u64"
+          },
+          {
+            "name": "assets_out",
+            "type": "u64"
+          },
+          {
+            "name": "total_assets",
+            "type": "u64"
+          },
+          {
+            "name": "total_shares",
             "type": "u64"
           }
         ]

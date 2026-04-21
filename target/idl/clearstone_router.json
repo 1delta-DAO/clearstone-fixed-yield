@@ -106,6 +106,226 @@
       ]
     },
     {
+      "name": "wrapper_buy_yt",
+      "docs": [
+        "Base → YT via (adapter.mint_sy → core.buy_yt).",
+        "`sy_in` is how much SY to spend on YT; `yt_out` is the exact YT",
+        "the trader expects. core.buy_yt is a self-CPI cascade so the outer",
+        "accounts must include every account `strip` + `trade_pt` touch."
+      ],
+      "discriminator": [
+        94,
+        68,
+        16,
+        91,
+        21,
+        168,
+        222,
+        105
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "base_mint"
+        },
+        {
+          "name": "sy_mint",
+          "writable": true
+        },
+        {
+          "name": "base_src",
+          "writable": true
+        },
+        {
+          "name": "base_vault",
+          "writable": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "sy_src",
+          "writable": true
+        },
+        {
+          "name": "yt_dst",
+          "writable": true
+        },
+        {
+          "name": "pt_dst",
+          "writable": true
+        },
+        {
+          "name": "market_escrow_sy",
+          "writable": true
+        },
+        {
+          "name": "market_escrow_pt",
+          "writable": true
+        },
+        {
+          "name": "token_fee_treasury_sy",
+          "writable": true
+        },
+        {
+          "name": "market_alt"
+        },
+        {
+          "name": "vault_authority",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "escrow_sy_vault",
+          "writable": true
+        },
+        {
+          "name": "mint_yt",
+          "writable": true
+        },
+        {
+          "name": "mint_pt",
+          "writable": true
+        },
+        {
+          "name": "vault_alt"
+        },
+        {
+          "name": "yield_position",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        }
+      ],
+      "args": [
+        {
+          "name": "base_in",
+          "type": "u64"
+        },
+        {
+          "name": "sy_in",
+          "type": "u64"
+        },
+        {
+          "name": "yt_out",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "wrapper_collect_interest",
+      "docs": [
+        "collect_interest on vault → adapter.redeem_sy. The interest ix",
+        "drops SY into `token_sy_dst`; we then redeem whatever lands there",
+        "to base."
+      ],
+      "discriminator": [
+        49,
+        225,
+        174,
+        89,
+        185,
+        117,
+        33,
+        68
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "yield_position",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "sy_src",
+          "writable": true
+        },
+        {
+          "name": "escrow_sy",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "writable": true
+        },
+        {
+          "name": "treasury_sy_token_account",
+          "writable": true
+        },
+        {
+          "name": "address_lookup_table"
+        },
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "base_mint"
+        },
+        {
+          "name": "sy_mint",
+          "writable": true
+        },
+        {
+          "name": "base_vault",
+          "writable": true
+        },
+        {
+          "name": "base_dst",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": {
+            "defined": {
+              "name": "Amount"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "wrapper_merge",
       "docs": [
         "PT + YT → base via (core.merge → adapter.redeem_sy)."
@@ -199,6 +419,539 @@
       "args": [
         {
           "name": "amount_py",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "wrapper_provide_liquidity",
+      "docs": [
+        "Base + PT → LP via (adapter.mint_sy → core.market_two_deposit_liquidity).",
+        "User supplies base (converted to SY inside) + pre-held PT; the two",
+        "are deposited pro-rata for LP."
+      ],
+      "discriminator": [
+        143,
+        141,
+        37,
+        135,
+        218,
+        136,
+        82,
+        143
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "base_mint"
+        },
+        {
+          "name": "sy_mint",
+          "writable": true
+        },
+        {
+          "name": "base_src",
+          "writable": true
+        },
+        {
+          "name": "base_vault",
+          "writable": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "pt_src",
+          "writable": true
+        },
+        {
+          "name": "sy_src",
+          "writable": true
+        },
+        {
+          "name": "escrow_pt",
+          "writable": true
+        },
+        {
+          "name": "escrow_sy",
+          "writable": true
+        },
+        {
+          "name": "lp_dst",
+          "writable": true
+        },
+        {
+          "name": "mint_lp",
+          "writable": true
+        },
+        {
+          "name": "address_lookup_table"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        }
+      ],
+      "args": [
+        {
+          "name": "base_in",
+          "type": "u64"
+        },
+        {
+          "name": "pt_intent",
+          "type": "u64"
+        },
+        {
+          "name": "sy_intent",
+          "type": "u64"
+        },
+        {
+          "name": "min_lp_out",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "wrapper_provide_liquidity_base",
+      "docs": [
+        "Base → LP via (adapter.mint_sy → core.trade_pt buy → deposit_liquidity).",
+        "Exchanges all base for SY, trades `pt_intent` worth of SY for PT,",
+        "deposits the resulting PT + remaining SY.  Caller supplies a",
+        "slippage bound on the SY-in leg (`max_sy_in` is negative)."
+      ],
+      "discriminator": [
+        27,
+        226,
+        43,
+        92,
+        253,
+        10,
+        154,
+        160
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "base_mint"
+        },
+        {
+          "name": "sy_mint",
+          "writable": true
+        },
+        {
+          "name": "base_src",
+          "writable": true
+        },
+        {
+          "name": "base_vault",
+          "writable": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "pt_src",
+          "writable": true
+        },
+        {
+          "name": "sy_src",
+          "writable": true
+        },
+        {
+          "name": "escrow_pt",
+          "writable": true
+        },
+        {
+          "name": "escrow_sy",
+          "writable": true
+        },
+        {
+          "name": "lp_dst",
+          "writable": true
+        },
+        {
+          "name": "mint_lp",
+          "writable": true
+        },
+        {
+          "name": "address_lookup_table"
+        },
+        {
+          "name": "token_fee_treasury_sy",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        }
+      ],
+      "args": [
+        {
+          "name": "base_in",
+          "type": "u64"
+        },
+        {
+          "name": "pt_intent",
+          "type": "u64"
+        },
+        {
+          "name": "max_sy_in",
+          "type": "i64"
+        },
+        {
+          "name": "sy_intent",
+          "type": "u64"
+        },
+        {
+          "name": "min_lp_out",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "wrapper_provide_liquidity_classic",
+      "docs": [
+        "PT + SY → LP passthrough. Spares the caller the Anchor-IDL gymnastics",
+        "of building the DepositLiquidity accounts list when they're already",
+        "holding SY directly."
+      ],
+      "discriminator": [
+        40,
+        95,
+        127,
+        3,
+        238,
+        166,
+        12,
+        160
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "base_mint"
+        },
+        {
+          "name": "sy_mint",
+          "writable": true
+        },
+        {
+          "name": "base_src",
+          "writable": true
+        },
+        {
+          "name": "base_vault",
+          "writable": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "pt_src",
+          "writable": true
+        },
+        {
+          "name": "sy_src",
+          "writable": true
+        },
+        {
+          "name": "escrow_pt",
+          "writable": true
+        },
+        {
+          "name": "escrow_sy",
+          "writable": true
+        },
+        {
+          "name": "lp_dst",
+          "writable": true
+        },
+        {
+          "name": "mint_lp",
+          "writable": true
+        },
+        {
+          "name": "address_lookup_table"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        }
+      ],
+      "args": [
+        {
+          "name": "pt_intent",
+          "type": "u64"
+        },
+        {
+          "name": "sy_intent",
+          "type": "u64"
+        },
+        {
+          "name": "min_lp_out",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "wrapper_sell_pt",
+      "docs": [
+        "PT → base via (core.trade_pt sell → adapter.redeem_sy).",
+        "`pt_amount` is the PT the trader is selling (positive). The",
+        "resulting SY lands in the user's SY ATA and is immediately",
+        "redeemed to base. `min_sy_out` gates the trade_pt slippage (SY",
+        "enters the user, so it's positive)."
+      ],
+      "discriminator": [
+        127,
+        65,
+        108,
+        12,
+        72,
+        21,
+        50,
+        200
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "sy_src",
+          "writable": true
+        },
+        {
+          "name": "pt_src",
+          "writable": true
+        },
+        {
+          "name": "market_escrow_sy",
+          "writable": true
+        },
+        {
+          "name": "market_escrow_pt",
+          "writable": true
+        },
+        {
+          "name": "market_alt"
+        },
+        {
+          "name": "token_fee_treasury_sy",
+          "writable": true
+        },
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "base_mint"
+        },
+        {
+          "name": "sy_mint",
+          "writable": true
+        },
+        {
+          "name": "base_vault",
+          "writable": true
+        },
+        {
+          "name": "base_dst",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        }
+      ],
+      "args": [
+        {
+          "name": "pt_amount",
+          "type": "u64"
+        },
+        {
+          "name": "min_sy_out",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "wrapper_sell_yt",
+      "docs": [
+        "YT → base via (core.sell_yt → adapter.redeem_sy). `yt_in` is what",
+        "the user is selling; `min_sy_out` is the slippage floor."
+      ],
+      "discriminator": [
+        146,
+        253,
+        101,
+        113,
+        98,
+        94,
+        193,
+        149
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "yt_src",
+          "writable": true
+        },
+        {
+          "name": "pt_src",
+          "writable": true
+        },
+        {
+          "name": "sy_src",
+          "writable": true
+        },
+        {
+          "name": "market_escrow_sy",
+          "writable": true
+        },
+        {
+          "name": "market_escrow_pt",
+          "writable": true
+        },
+        {
+          "name": "market_alt"
+        },
+        {
+          "name": "token_fee_treasury_sy",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "vault_authority",
+          "writable": true
+        },
+        {
+          "name": "escrow_sy_vault",
+          "writable": true
+        },
+        {
+          "name": "mint_yt",
+          "writable": true
+        },
+        {
+          "name": "mint_pt",
+          "writable": true
+        },
+        {
+          "name": "vault_alt"
+        },
+        {
+          "name": "yield_position",
+          "writable": true
+        },
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "base_mint"
+        },
+        {
+          "name": "sy_mint",
+          "writable": true
+        },
+        {
+          "name": "base_vault",
+          "writable": true
+        },
+        {
+          "name": "base_dst",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        }
+      ],
+      "args": [
+        {
+          "name": "yt_in",
+          "type": "u64"
+        },
+        {
+          "name": "min_sy_out",
           "type": "u64"
         }
       ]
@@ -300,6 +1053,205 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "wrapper_withdraw_liquidity",
+      "docs": [
+        "LP → base + PT. Withdraws liquidity, then redeems the SY leg",
+        "to base. PT is returned to the user."
+      ],
+      "discriminator": [
+        239,
+        203,
+        52,
+        75,
+        39,
+        22,
+        70,
+        209
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "pt_dst",
+          "writable": true
+        },
+        {
+          "name": "sy_src",
+          "writable": true
+        },
+        {
+          "name": "escrow_pt",
+          "writable": true
+        },
+        {
+          "name": "escrow_sy",
+          "writable": true
+        },
+        {
+          "name": "lp_src",
+          "writable": true
+        },
+        {
+          "name": "mint_lp",
+          "writable": true
+        },
+        {
+          "name": "address_lookup_table"
+        },
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "base_mint"
+        },
+        {
+          "name": "sy_mint",
+          "writable": true
+        },
+        {
+          "name": "base_vault",
+          "writable": true
+        },
+        {
+          "name": "base_dst",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        }
+      ],
+      "args": [
+        {
+          "name": "lp_in",
+          "type": "u64"
+        },
+        {
+          "name": "min_pt_out",
+          "type": "u64"
+        },
+        {
+          "name": "min_sy_out",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "wrapper_withdraw_liquidity_classic",
+      "docs": [
+        "LP → PT + SY passthrough. Same call as core.market_two_withdraw_liquidity",
+        "but signed through the router (useful when paired with other",
+        "router-only ops in a batch)."
+      ],
+      "discriminator": [
+        6,
+        139,
+        182,
+        200,
+        96,
+        200,
+        106,
+        2
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "pt_dst",
+          "writable": true
+        },
+        {
+          "name": "sy_src",
+          "writable": true
+        },
+        {
+          "name": "escrow_pt",
+          "writable": true
+        },
+        {
+          "name": "escrow_sy",
+          "writable": true
+        },
+        {
+          "name": "lp_src",
+          "writable": true
+        },
+        {
+          "name": "mint_lp",
+          "writable": true
+        },
+        {
+          "name": "address_lookup_table"
+        },
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "base_mint"
+        },
+        {
+          "name": "sy_mint",
+          "writable": true
+        },
+        {
+          "name": "base_vault",
+          "writable": true
+        },
+        {
+          "name": "base_dst",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        }
+      ],
+      "args": [
+        {
+          "name": "lp_in",
+          "type": "u64"
+        },
+        {
+          "name": "min_pt_out",
+          "type": "u64"
+        },
+        {
+          "name": "min_sy_out",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -325,6 +1277,23 @@
     }
   ],
   "types": [
+    {
+      "name": "Amount",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "All"
+          },
+          {
+            "name": "Some",
+            "fields": [
+              "u64"
+            ]
+          }
+        ]
+      }
+    },
     {
       "name": "ClaimLimits",
       "type": {
