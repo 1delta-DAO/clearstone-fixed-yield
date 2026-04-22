@@ -2,12 +2,15 @@ use crate::{
     cpi_common::CpiAccounts,
     error::ExponentCoreError,
     state::MarketTwo,
-    util::token_transfer,
+    util::sy_transfer_checked,
     utils::{do_deposit_sy, do_get_sy_state, do_withdraw_sy},
     STATUS_CAN_BUY_PT, STATUS_CAN_SELL_PT,
 };
 use anchor_lang::prelude::*;
-use anchor_spl::{token::Token, token_2022::Transfer, token_interface::TokenAccount};
+use anchor_spl::{
+    token::Token,
+    token_interface::{Mint, TokenAccount, TransferChecked},
+};
 use precise_number::Number;
 
 #[event_cpi]
@@ -23,12 +26,13 @@ pub struct TradePt<'info> {
         has_one = token_sy_escrow,
         has_one = token_pt_escrow,
         has_one = token_fee_treasury_sy,
+        has_one = mint_sy,
     )]
     pub market: Account<'info, MarketTwo>,
 
     /// Trader's SY token account
     /// Mint is constrained by TokenProgram
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub token_sy_trader: InterfaceAccount<'info, TokenAccount>,
 
     /// Receiving PT token account
@@ -38,7 +42,7 @@ pub struct TradePt<'info> {
 
     /// Account owned by market
     /// This is a temporary account that receives SY tokens from the user, after which it transfers them to the SY program
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub token_sy_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// PT liquidity account
@@ -53,63 +57,73 @@ pub struct TradePt<'info> {
     /// CHECK: constrain by market
     pub sy_program: UncheckedAccount<'info>,
 
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub token_fee_treasury_sy: InterfaceAccount<'info, TokenAccount>,
+
+    /// SY mint — required for transfer_checked. Constrained via market.has_one.
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
 }
 
 impl<'i> TradePt<'i> {
-    fn transfer_sy_accounts(&self, is_buy_pt: bool) -> Transfer<'i> {
+    fn transfer_sy_accounts(&self, is_buy_pt: bool) -> TransferChecked<'i> {
         // If buying PT, the trader sends in SY
-        // If selling PT, the market sends out Sk
+        // If selling PT, the market sends out SY
         if is_buy_pt {
-            Transfer {
+            TransferChecked {
                 from: self.token_sy_trader.to_account_info(),
+                mint: self.mint_sy.to_account_info(),
                 to: self.token_sy_escrow.to_account_info(),
                 authority: self.trader.to_account_info(),
             }
         } else {
-            Transfer {
+            TransferChecked {
                 from: self.token_sy_escrow.to_account_info(),
+                mint: self.mint_sy.to_account_info(),
                 to: self.token_sy_trader.to_account_info(),
                 authority: self.market.to_account_info(),
             }
         }
     }
 
-    fn transfer_sy_fee_accounts(&self, is_buy_pt: bool) -> Transfer<'i> {
+    fn transfer_sy_fee_accounts(&self, is_buy_pt: bool) -> TransferChecked<'i> {
         if is_buy_pt {
-            Transfer {
+            TransferChecked {
                 from: self.token_sy_trader.to_account_info(),
+                mint: self.mint_sy.to_account_info(),
                 to: self.token_fee_treasury_sy.to_account_info(),
                 authority: self.trader.to_account_info(),
             }
         } else {
-            Transfer {
+            TransferChecked {
                 from: self.token_sy_escrow.to_account_info(),
+                mint: self.mint_sy.to_account_info(),
                 to: self.token_fee_treasury_sy.to_account_info(),
                 authority: self.market.to_account_info(),
             }
         }
     }
 
-    fn transfer_sy_fee_context(&self, is_buy_pt: bool) -> CpiContext<'_, '_, '_, 'i, Transfer<'i>> {
+    fn transfer_sy_fee_context(
+        &self,
+        is_buy_pt: bool,
+    ) -> CpiContext<'_, '_, '_, 'i, TransferChecked<'i>> {
         CpiContext::new(
             self.token_program.to_account_info(),
             self.transfer_sy_fee_accounts(is_buy_pt),
         )
     }
 
-    fn transfer_pt_accounts(&self, is_buy_pt: bool) -> Transfer<'i> {
+    fn transfer_pt_accounts(&self, is_buy_pt: bool) -> anchor_spl::token_2022::Transfer<'i> {
         // if buying PT, the market sends out PT to trader
         // if selling PT, the trader sends in PT
         if is_buy_pt {
-            Transfer {
+            anchor_spl::token_2022::Transfer {
                 from: self.token_pt_escrow.to_account_info(),
                 to: self.token_pt_trader.to_account_info(),
                 authority: self.market.to_account_info(),
             }
         } else {
-            Transfer {
+            anchor_spl::token_2022::Transfer {
                 from: self.token_pt_trader.to_account_info(),
                 to: self.token_pt_escrow.to_account_info(),
                 authority: self.trader.to_account_info(),
@@ -117,14 +131,20 @@ impl<'i> TradePt<'i> {
         }
     }
 
-    fn transfer_sy_context(&self, is_buy_pt: bool) -> CpiContext<'_, '_, '_, 'i, Transfer<'i>> {
+    fn transfer_sy_context(
+        &self,
+        is_buy_pt: bool,
+    ) -> CpiContext<'_, '_, '_, 'i, TransferChecked<'i>> {
         CpiContext::new(
             self.token_program.to_account_info(),
             self.transfer_sy_accounts(is_buy_pt),
         )
     }
 
-    fn transfer_pt_context(&self, is_buy_pt: bool) -> CpiContext<'_, '_, '_, 'i, Transfer<'i>> {
+    fn transfer_pt_context(
+        &self,
+        is_buy_pt: bool,
+    ) -> CpiContext<'_, '_, '_, 'i, anchor_spl::token_2022::Transfer<'i>> {
         CpiContext::new(
             self.token_program.to_account_info(),
             self.transfer_pt_accounts(is_buy_pt),
@@ -137,9 +157,9 @@ impl<'i> TradePt<'i> {
         if is_buy_pt {
             // if buying PT, transfer from PT escrow to trader
             // sign with market
-            token_transfer(ctx.with_signer(&[&self.market.signer_seeds()]), amount)
+            crate::util::token_transfer(ctx.with_signer(&[&self.market.signer_seeds()]), amount)
         } else {
-            token_transfer(ctx, amount)
+            crate::util::token_transfer(ctx, amount)
         }
     }
 
@@ -245,6 +265,7 @@ pub fn handler<'info>(
         ctx.accounts.transfer_sy_context(is_buy_pt),
         ctx.accounts.transfer_sy_fee_context(is_buy_pt),
         trade_result.treasury_fee_amount,
+        ctx.accounts.mint_sy.decimals,
     )?;
     ctx.accounts.market.reload()?;
 
@@ -293,14 +314,15 @@ fn transfer_sy<'info>(
     rem_accounts: &[AccountInfo<'info>],
     sy_program: Pubkey,
     seeds: &[&[&[u8]]],
-    token_transfer_ctx: CpiContext<'_, '_, '_, 'info, Transfer<'info>>,
-    transfer_sy_fee_ctx: CpiContext<'_, '_, '_, 'info, Transfer<'info>>,
+    token_transfer_ctx: CpiContext<'_, '_, '_, 'info, TransferChecked<'info>>,
+    transfer_sy_fee_ctx: CpiContext<'_, '_, '_, 'info, TransferChecked<'info>>,
     treasury_fee_amount: u64,
+    decimals: u8,
 ) -> Result<()> {
     if is_buy_pt {
         let amount_to_deposit = amount.checked_sub(treasury_fee_amount).unwrap();
         // First transfer SY from trader to escrow
-        token_transfer(token_transfer_ctx, amount_to_deposit)?;
+        sy_transfer_checked(token_transfer_ctx, amount_to_deposit, decimals)?;
         // Then transfer SY from escrow to SY program
         do_deposit_sy(
             guard,
@@ -314,7 +336,7 @@ fn transfer_sy<'info>(
         )?;
 
         // Transfer portion of the sy fee to the treasury
-        token_transfer(transfer_sy_fee_ctx, treasury_fee_amount)?;
+        sy_transfer_checked(transfer_sy_fee_ctx, treasury_fee_amount, decimals)?;
     } else {
         // First withdraw SY from SY program to escrow
         do_withdraw_sy(
@@ -329,10 +351,14 @@ fn transfer_sy<'info>(
         )?;
 
         // Then transfer SY from escrow to trader
-        token_transfer(token_transfer_ctx.with_signer(seeds), amount)?;
+        sy_transfer_checked(token_transfer_ctx.with_signer(seeds), amount, decimals)?;
 
         // Transfer portion of the sy fee to the treasury
-        token_transfer(transfer_sy_fee_ctx.with_signer(seeds), treasury_fee_amount)?;
+        sy_transfer_checked(
+            transfer_sy_fee_ctx.with_signer(seeds),
+            treasury_fee_amount,
+            decimals,
+        )?;
     };
 
     Ok(())

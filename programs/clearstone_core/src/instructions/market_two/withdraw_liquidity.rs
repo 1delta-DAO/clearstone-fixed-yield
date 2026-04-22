@@ -1,14 +1,12 @@
-use crate::{error::ExponentCoreError, state::*, utils::do_withdraw_sy};
+use crate::{error::ExponentCoreError, state::*, util::sy_transfer_checked, utils::do_withdraw_sy};
 use anchor_lang::prelude::*;
 use anchor_spl::{
     token::Token,
     token_2022::{burn, Burn},
+    token_interface::{Mint, TokenAccount, TransferChecked},
 };
 #[allow(deprecated)]
-use anchor_spl::{
-    token_2022::{transfer, Transfer},
-    token_interface::{Mint, TokenAccount},
-};
+use anchor_spl::token_2022::{transfer, Transfer};
 
 #[event_cpi]
 #[derive(Accounts)]
@@ -22,14 +20,15 @@ pub struct WithdrawLiquidity<'info> {
         has_one = token_sy_escrow,
         has_one = mint_lp,
         has_one = sy_program,
-        has_one = address_lookup_table
+        has_one = address_lookup_table,
+        has_one = mint_sy,
     )]
     pub market: Box<Account<'info, MarketTwo>>,
 
     #[account(mut)]
     pub token_pt_dst: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub token_sy_dst: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Market PT liquidity account
@@ -37,7 +36,7 @@ pub struct WithdrawLiquidity<'info> {
     pub token_pt_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Market-owned interchange account for SY
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub token_sy_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(mut)]
@@ -45,6 +44,9 @@ pub struct WithdrawLiquidity<'info> {
 
     #[account(mut)]
     pub mint_lp: Box<InterfaceAccount<'info, Mint>>,
+
+    /// SY mint — required for transfer_checked. Constrained via market.has_one.
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
 
     /// Address lookup table for vault
     /// CHECK: constrained by market
@@ -65,9 +67,10 @@ impl<'i> WithdrawLiquidity<'i> {
         }
     }
 
-    fn to_transfer_sy_out_accounts(&self) -> Transfer<'i> {
-        Transfer {
+    fn to_transfer_sy_out_accounts(&self) -> TransferChecked<'i> {
+        TransferChecked {
             from: self.token_sy_escrow.to_account_info(),
+            mint: self.mint_sy.to_account_info(),
             to: self.token_sy_dst.to_account_info(),
             authority: self.market.to_account_info(),
         }
@@ -88,7 +91,7 @@ impl<'i> WithdrawLiquidity<'i> {
         )
     }
 
-    fn to_transfer_sy_out_ctx(&self) -> CpiContext<'_, '_, '_, 'i, Transfer<'i>> {
+    fn to_transfer_sy_out_ctx(&self) -> CpiContext<'_, '_, '_, 'i, TransferChecked<'i>> {
         CpiContext::new(
             self.token_program.to_account_info(),
             self.to_transfer_sy_out_accounts(),
@@ -112,11 +115,11 @@ impl<'i> WithdrawLiquidity<'i> {
     }
 
     fn do_transfer_sy_out(&self, amount: u64) -> Result<()> {
-        #[allow(deprecated)]
-        transfer(
+        sy_transfer_checked(
             self.to_transfer_sy_out_ctx()
                 .with_signer(&[&self.market.signer_seeds()]),
             amount,
+            self.mint_sy.decimals,
         )
     }
 

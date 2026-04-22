@@ -2,7 +2,7 @@ use super::common::update_vault_yield;
 use crate::{
     error::ExponentCoreError,
     state::*,
-    util::{now, token_transfer},
+    util::{now, sy_transfer_checked},
     utils::{do_get_sy_state, do_withdraw_sy, sy_cpi::validate_sy_state},
 };
 use anchor_lang::prelude::*;
@@ -31,17 +31,18 @@ pub struct Merge<'info> {
         has_one = address_lookup_table,
         has_one = mint_yt,
         has_one = mint_pt,
+        has_one = mint_sy,
         has_one = authority,
         has_one = yield_position,
     )]
     pub vault: Box<Account<'info, Vault>>,
 
     /// Destination account for SY withdrawn from vault
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub sy_dst: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Vault-owned account for SY tokens
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub escrow_sy: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// The owner's YT token account
@@ -59,6 +60,9 @@ pub struct Merge<'info> {
     /// Mint for PT -- needed for burning
     #[account(mut)]
     pub mint_pt: Box<InterfaceAccount<'info, Mint>>,
+
+    /// SY mint — required for transfer_checked. Constrained via has_one on vault.
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
 
     pub token_program: Program<'info, Token>,
 
@@ -96,11 +100,12 @@ impl<'a> Merge<'a> {
         )
     }
 
-    fn transfer_sy_context(&self) -> CpiContext<'_, '_, '_, 'a, Transfer<'a>> {
+    fn transfer_sy_context(&self) -> CpiContext<'_, '_, '_, 'a, TransferChecked<'a>> {
         CpiContext::new(
             self.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
                 from: self.escrow_sy.to_account_info(),
+                mint: self.mint_sy.to_account_info(),
                 to: self.sy_dst.to_account_info(),
                 authority: self.authority.to_account_info(),
             },
@@ -109,10 +114,11 @@ impl<'a> Merge<'a> {
 
     /// Transfer SY to the user
     fn transfer_sy(&self, amount: u64) -> Result<()> {
-        token_transfer(
+        sy_transfer_checked(
             self.transfer_sy_context()
                 .with_signer(&[&self.vault.signer_seeds()]),
             amount,
+            self.mint_sy.decimals,
         )
     }
 

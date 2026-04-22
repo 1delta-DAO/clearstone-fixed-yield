@@ -3,6 +3,7 @@ use crate::{
     cpi_common::CpiAccounts,
     error::ExponentCoreError,
     seeds::MARKET_SEED,
+    util::sy_transfer_checked,
     utils::{cpi_init_sy_personal_account, do_deposit_sy},
     MarketTwo, Vault, ID,
 };
@@ -11,7 +12,7 @@ use anchor_spl::{
     associated_token::AssociatedToken,
     token::Token,
     token_2022::{self, MintTo, Transfer},
-    token_interface::{Mint, TokenAccount},
+    token_interface::{Mint, TokenAccount, TransferChecked},
 };
 use precise_number::Number;
 use token_util::{create_associated_token_account_2022, create_mint_2022, create_token_account};
@@ -114,9 +115,10 @@ impl<'i> MarketTwoInit<'i> {
         }
     }
 
-    fn transfer_sy_accounts(&self) -> Transfer<'i> {
-        Transfer {
+    fn transfer_sy_accounts(&self) -> TransferChecked<'i> {
+        TransferChecked {
             from: self.sy_src.to_account_info(),
+            mint: self.mint_sy.to_account_info(),
             to: self.escrow_sy.to_account_info(),
             authority: self.payer.to_account_info(),
         }
@@ -144,7 +146,7 @@ impl<'i> MarketTwoInit<'i> {
         )
     }
 
-    fn transfer_sy_context(&self) -> CpiContext<'_, '_, '_, 'i, Transfer<'i>> {
+    fn transfer_sy_context(&self) -> CpiContext<'_, '_, '_, 'i, TransferChecked<'i>> {
         CpiContext::new(
             self.token_program.to_account_info(),
             self.transfer_sy_accounts(),
@@ -157,8 +159,7 @@ impl<'i> MarketTwoInit<'i> {
     }
 
     fn do_transfer_sy(&self, amount: u64) -> Result<()> {
-        #[allow(deprecated)]
-        token_2022::transfer(self.transfer_sy_context(), amount)
+        sy_transfer_checked(self.transfer_sy_context(), amount, self.mint_sy.decimals)
     }
 
     fn do_mint_lp(&self, amount: u64) -> Result<()> {

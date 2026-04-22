@@ -1,14 +1,11 @@
-use crate::{error::ExponentCoreError, state::*, utils::do_deposit_sy};
+use crate::{error::ExponentCoreError, state::*, util::sy_transfer_checked, utils::do_deposit_sy};
 use anchor_lang::prelude::*;
 use anchor_spl::{
     token::Token,
-    token_interface::{mint_to, MintTo},
+    token_interface::{mint_to, Mint, MintTo, TokenAccount, TransferChecked},
 };
 #[allow(deprecated)]
-use anchor_spl::{
-    token_interface::{transfer, Transfer},
-    token_interface::{Mint, TokenAccount},
-};
+use anchor_spl::token_interface::{transfer, Transfer};
 
 #[event_cpi]
 #[derive(Accounts)]
@@ -22,20 +19,21 @@ pub struct DepositLiquidity<'info> {
         has_one = token_sy_escrow,
         has_one = mint_lp,
         has_one = sy_program,
-        has_one = address_lookup_table
+        has_one = address_lookup_table,
+        has_one = mint_sy,
     )]
     pub market: Box<Account<'info, MarketTwo>>,
 
     #[account(mut)]
     pub token_pt_src: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub token_sy_src: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(mut)]
     pub token_pt_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub token_sy_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(mut)]
@@ -43,6 +41,9 @@ pub struct DepositLiquidity<'info> {
 
     #[account(mut)]
     pub mint_lp: Box<InterfaceAccount<'info, Mint>>,
+
+    /// SY mint — required for transfer_checked. Constrained via market.has_one.
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
 
     /// Address lookup table for vault
     /// CHECK: constrained by market
@@ -63,9 +64,10 @@ impl<'i> DepositLiquidity<'i> {
         }
     }
 
-    fn to_transfer_sy_in_accounts(&self) -> Transfer<'i> {
-        Transfer {
+    fn to_transfer_sy_in_accounts(&self) -> TransferChecked<'i> {
+        TransferChecked {
             from: self.token_sy_src.to_account_info(),
+            mint: self.mint_sy.to_account_info(),
             to: self.token_sy_escrow.to_account_info(),
             authority: self.depositor.to_account_info(),
         }
@@ -86,7 +88,7 @@ impl<'i> DepositLiquidity<'i> {
         )
     }
 
-    fn to_transfer_sy_in_ctx(&self) -> CpiContext<'_, '_, '_, 'i, Transfer<'i>> {
+    fn to_transfer_sy_in_ctx(&self) -> CpiContext<'_, '_, '_, 'i, TransferChecked<'i>> {
         CpiContext::new(
             self.token_program.to_account_info(),
             self.to_transfer_sy_in_accounts(),
@@ -106,8 +108,7 @@ impl<'i> DepositLiquidity<'i> {
     }
 
     fn do_transfer_sy_in(&self, amount: u64) -> Result<()> {
-        #[allow(deprecated)]
-        transfer(self.to_transfer_sy_in_ctx(), amount)
+        sy_transfer_checked(self.to_transfer_sy_in_ctx(), amount, self.mint_sy.decimals)
     }
 
     fn do_transfers_in(&self, pt_in: u64, sy_in: u64) -> Result<()> {

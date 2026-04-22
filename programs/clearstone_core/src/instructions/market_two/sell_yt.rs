@@ -22,9 +22,14 @@ pub struct SellYt<'info> {
         has_one = sy_program,
         has_one = token_sy_escrow,
         has_one = token_pt_escrow,
-        has_one = token_fee_treasury_sy
+        has_one = token_fee_treasury_sy,
+        has_one = mint_sy,
     )]
     pub market: Box<Account<'info, MarketTwo>>,
+
+    /// SY mint — required for the nested merge CPI's transfer_checked.
+    /// Constrained via market.has_one = mint_sy.
+    pub mint_sy: Box<InterfaceAccount<'info, anchor_spl::token_interface::Mint>>,
 
     #[account(mut)]
     pub token_yt_trader: Box<InterfaceAccount<'info, TokenAccount>>,
@@ -112,6 +117,7 @@ impl<'i> SellYt<'i> {
             pt_src: self.token_pt_trader.to_account_info(),
             mint_yt: self.mint_yt.to_account_info(),
             mint_pt: self.mint_pt.to_account_info(),
+            mint_sy: self.mint_sy.to_account_info(),
             token_program: self.token_program.to_account_info(),
             sy_program: self.sy_program.to_account_info(),
             address_lookup_table: self.address_lookup_table_vault.to_account_info(),
@@ -133,6 +139,7 @@ impl<'i> SellYt<'i> {
             token_program: self.token_program.to_account_info(),
             sy_program: self.sy_program.to_account_info(),
             token_fee_treasury_sy: self.token_fee_treasury_sy.to_account_info(),
+            mint_sy: self.mint_sy.to_account_info(),
             event_authority: self.event_authority.to_account_info(),
             program: self.program.to_account_info(),
         }

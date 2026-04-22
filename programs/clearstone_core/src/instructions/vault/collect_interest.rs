@@ -1,10 +1,13 @@
 use crate::{
     error::ExponentCoreError, instructions::vault::common::yield_position_earn,
-    state::*, util::token_transfer, utils::{do_withdraw_sy, sy_cpi::validate_sy_state},
+    state::*, util::sy_transfer_checked, utils::{do_withdraw_sy, sy_cpi::validate_sy_state},
 };
 use amount_value::Amount;
 use anchor_lang::prelude::*;
-use anchor_spl::{token::Token, token_2022::Transfer, token_interface::TokenAccount};
+use anchor_spl::{
+    token::Token,
+    token_interface::{Mint, TokenAccount, TransferChecked},
+};
 
 /// Withdraw the SY earned by holding YT
 ///
@@ -37,14 +40,15 @@ pub struct CollectInterest<'info> {
         has_one = escrow_sy,
         has_one = treasury_sy_token_account,
         has_one = sy_program,
+        has_one = mint_sy,
     )]
     pub vault: Account<'info, Vault>,
 
     /// The receiving token account for SY withdrawn
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub token_sy_dst: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub escrow_sy: InterfaceAccount<'info, TokenAccount>,
 
     /// CHECK: constrained by vault
@@ -56,19 +60,26 @@ pub struct CollectInterest<'info> {
     /// CHECK: constrained by vault
     pub sy_program: UncheckedAccount<'info>,
 
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub treasury_sy_token_account: InterfaceAccount<'info, TokenAccount>,
 
     /// CHECK: constrained by vault
     pub address_lookup_table: UncheckedAccount<'info>,
+
+    /// SY mint — required for transfer_checked. Constrained via vault.has_one.
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
 }
 
 impl<'i> CollectInterest<'i> {
-    fn transfer_context(&self, to: AccountInfo<'i>) -> CpiContext<'_, '_, '_, 'i, Transfer<'i>> {
+    fn transfer_context(
+        &self,
+        to: AccountInfo<'i>,
+    ) -> CpiContext<'_, '_, '_, 'i, TransferChecked<'i>> {
         CpiContext::new(
             self.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
                 from: self.escrow_sy.to_account_info(),
+                mint: self.mint_sy.to_account_info(),
                 to,
                 authority: self.authority.to_account_info(),
             },
@@ -79,7 +90,7 @@ impl<'i> CollectInterest<'i> {
         let signer_seeds = &[&self.vault.signer_seeds()[..]];
         let ctx = self.transfer_context(to).with_signer(signer_seeds);
 
-        token_transfer(ctx, amount)
+        sy_transfer_checked(ctx, amount, self.mint_sy.decimals)
     }
 
     fn validate(&self) -> Result<()> {

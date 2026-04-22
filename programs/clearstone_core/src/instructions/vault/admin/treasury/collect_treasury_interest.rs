@@ -1,10 +1,13 @@
 use crate::{
-    instructions::util::deserialize_lookup_table, state::*, util::token_transfer,
+    instructions::util::deserialize_lookup_table, state::*, util::sy_transfer_checked,
     utils::cpi_withdraw_sy,
 };
 use amount_value::Amount;
 use anchor_lang::prelude::*;
-use anchor_spl::{token::Token, token_2022::Transfer, token_interface::TokenAccount};
+use anchor_spl::{
+    token::Token,
+    token_interface::{Mint, TokenAccount, TransferChecked},
+};
 use cpi_common::to_account_metas;
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -34,14 +37,15 @@ pub struct CollectTreasuryInterest<'info> {
         has_one = yield_position,
         has_one = sy_program,
         has_one = curator,
+        has_one = mint_sy,
     )]
     pub vault: Account<'info, Vault>,
 
     /// The receiving token account for SY withdrawn
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub sy_dst: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub escrow_sy: InterfaceAccount<'info, TokenAccount>,
 
     /// CHECK: constrained by vault
@@ -54,14 +58,18 @@ pub struct CollectTreasuryInterest<'info> {
 
     /// CHECK: constrained by vault
     pub address_lookup_table: UncheckedAccount<'info>,
+
+    /// SY mint — required for transfer_checked. Constrained via vault.has_one.
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
 }
 
 impl<'i> CollectTreasuryInterest<'i> {
-    fn transfer_context(&self) -> CpiContext<'_, '_, '_, 'i, Transfer<'i>> {
+    fn transfer_context(&self) -> CpiContext<'_, '_, '_, 'i, TransferChecked<'i>> {
         CpiContext::new(
             self.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
                 from: self.escrow_sy.to_account_info(),
+                mint: self.mint_sy.to_account_info(),
                 to: self.sy_dst.to_account_info(),
                 authority: self.authority.to_account_info(),
             },
@@ -72,7 +80,7 @@ impl<'i> CollectTreasuryInterest<'i> {
         let signer_seeds = &[&self.vault.signer_seeds()[..]];
         let ctx = self.transfer_context().with_signer(signer_seeds);
 
-        token_transfer(ctx, amount)
+        sy_transfer_checked(ctx, amount, self.mint_sy.decimals)
     }
 }
 

@@ -2,7 +2,7 @@ use crate::{
     error::ExponentCoreError,
     instructions::self_cpi::{do_cpi_strip, do_cpi_trade_pt, StripAccounts, TradePtAccounts},
     state::*,
-    util::token_transfer,
+    util::sy_transfer_checked,
     utils::{do_deposit_sy, do_get_sy_state, do_withdraw_sy, py_to_sy_ceil},
 };
 use anchor_lang::prelude::*;
@@ -22,12 +22,13 @@ pub struct BuyYt<'info> {
         has_one = sy_program,
         has_one = token_sy_escrow,
         has_one = token_pt_escrow,
-        has_one = token_fee_treasury_sy
+        has_one = token_fee_treasury_sy,
+        has_one = mint_sy,
     )]
     pub market: Box<Account<'info, MarketTwo>>,
 
     /// Source account for the trader's SY tokens
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub token_sy_trader: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Destination for receiving YT tokens
@@ -38,12 +39,15 @@ pub struct BuyYt<'info> {
     pub token_pt_trader: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Temporary SY account owned by market
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub token_sy_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// PT liquidity owned by market
     #[account(mut)]
     pub token_pt_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// SY mint — required for transfer_checked. Constrained via market.has_one.
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
 
     /// CHECK: Checked by trade_pt
     #[account(mut)]
@@ -89,28 +93,31 @@ pub struct BuyYt<'info> {
 }
 
 impl<'i> BuyYt<'i> {
-    fn borrow_sy_accounts(&self) -> Transfer<'i> {
-        Transfer {
+    fn borrow_sy_accounts(&self) -> TransferChecked<'i> {
+        TransferChecked {
             from: self.token_sy_escrow.to_account_info(),
+            mint: self.mint_sy.to_account_info(),
             to: self.token_sy_trader.to_account_info(),
             authority: self.market.to_account_info(),
         }
     }
 
     fn do_borrow_sy(&self, amount: u64) -> Result<()> {
-        token_transfer(
+        sy_transfer_checked(
             CpiContext::new(
                 self.token_program.to_account_info(),
                 self.borrow_sy_accounts(),
             )
             .with_signer(&[&self.market.signer_seeds()]),
             amount,
+            self.mint_sy.decimals,
         )
     }
 
-    fn repay_sy_accounts(&self) -> Transfer<'i> {
-        Transfer {
+    fn repay_sy_accounts(&self) -> TransferChecked<'i> {
+        TransferChecked {
             from: self.token_sy_trader.to_account_info(),
+            mint: self.mint_sy.to_account_info(),
             to: self.token_sy_escrow.to_account_info(),
             authority: self.trader.to_account_info(),
         }
@@ -127,6 +134,7 @@ impl<'i> BuyYt<'i> {
             pt_dst: self.token_pt_trader.to_account_info(),
             mint_yt: self.mint_yt.to_account_info(),
             mint_pt: self.mint_pt.to_account_info(),
+            mint_sy: self.mint_sy.to_account_info(),
             address_lookup_table: self.address_lookup_table_vault.to_account_info(),
             sy_program: self.sy_program.to_account_info(),
             yield_position: self.yield_position.to_account_info(),
@@ -148,18 +156,20 @@ impl<'i> BuyYt<'i> {
             token_program: self.token_program.to_account_info(),
             sy_program: self.sy_program.to_account_info(),
             token_fee_treasury_sy: self.token_fee_treasury_sy.to_account_info(),
+            mint_sy: self.mint_sy.to_account_info(),
             event_authority: self.event_authority.to_account_info(),
             program: self.program.to_account_info(),
         }
     }
 
     fn do_repay_sy(&self, amount: u64) -> Result<()> {
-        token_transfer(
+        sy_transfer_checked(
             CpiContext::new(
                 self.token_program.to_account_info(),
                 self.repay_sy_accounts(),
             ),
             amount,
+            self.mint_sy.decimals,
         )
     }
 

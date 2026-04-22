@@ -2,7 +2,7 @@ use super::common::update_vault_yield;
 use crate::{
     error::ExponentCoreError,
     state::*,
-    util::{now, token_transfer},
+    util::{now, sy_transfer_checked},
     utils::{sy_cpi::validate_sy_state, *},
 };
 use anchor_lang::prelude::*;
@@ -31,6 +31,7 @@ pub struct Strip<'info> {
         has_one = sy_program,
         has_one = mint_yt,
         has_one = mint_pt,
+        has_one = mint_sy,
         has_one = escrow_sy,
         has_one = authority,
         has_one = address_lookup_table,
@@ -39,11 +40,11 @@ pub struct Strip<'info> {
     pub vault: Box<Account<'info, Vault>>,
 
     /// Depositor's SY token account
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub sy_src: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Temporary account owned by the vault for receiving SY tokens before depositing into the SY Program's escrow account
-    #[account(mut)]
+    #[account(mut, token::mint = mint_sy)]
     pub escrow_sy: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Final destination for receiving YT (probably, but not necessarily, owned by the depositor)
@@ -59,6 +60,9 @@ pub struct Strip<'info> {
 
     #[account(mut)]
     pub mint_pt: Box<InterfaceAccount<'info, Mint>>,
+
+    /// SY mint — required for transfer_checked. Constrained via has_one on vault.
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
 
     pub token_program: Program<'info, Token>,
 
@@ -97,11 +101,12 @@ impl<'a> Strip<'a> {
         )
     }
 
-    fn transfer_sy_context(&self) -> CpiContext<'_, '_, '_, 'a, Transfer<'a>> {
+    fn transfer_sy_context(&self) -> CpiContext<'_, '_, '_, 'a, TransferChecked<'a>> {
         CpiContext::new(
             self.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
                 from: self.sy_src.to_account_info(),
+                mint: self.mint_sy.to_account_info(),
                 to: self.escrow_sy.to_account_info(),
                 authority: self.depositor.to_account_info(),
             },
@@ -153,7 +158,11 @@ pub fn handler<'info>(
     amount: u64,
 ) -> Result<StripEvent> {
     // First, transfer SY tokens to account owned by vault
-    token_transfer(ctx.accounts.transfer_sy_context(), amount)?;
+    sy_transfer_checked(
+        ctx.accounts.transfer_sy_context(),
+        amount,
+        ctx.accounts.mint_sy.decimals,
+    )?;
 
     // SY CPI — guard applied inside do_deposit_sy via vault's guard byte.
     let sy_state = do_deposit_sy(
