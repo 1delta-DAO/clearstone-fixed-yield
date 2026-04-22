@@ -17,13 +17,23 @@ import { assert, expect } from "chai";
 import type { ClearstoneCore } from "../target/types/clearstone_core";
 import type { KaminoSyAdapter } from "../target/types/kamino_sy_adapter";
 import type { MockKlend } from "../target/types/mock_klend";
-import { createBaseMint, createAta, mintToUser } from "./fixtures";
+import {
+  createBaseMint,
+  createAta,
+  mintToUser,
+  strip,
+  merge,
+  tradePt,
+} from "./fixtures";
 import {
   initKaminoSyMarketNoKyc,
   initKaminoSyMarketGovernorWhitelist,
   initMockKlendReserve,
+  kaminoAdapterExtraAccountsForVault,
   mintSyKamino,
   pokeMockKlendRate,
+  setupMarketOverKamino,
+  setupVaultOverKamino,
 } from "./kamino_fixtures";
 
 anchor.setProvider(anchor.AnchorProvider.env());
@@ -386,27 +396,264 @@ describe("kamino_sy_adapter :: kyc_mode is optional", () => {
 });
 
 // =============================================================================
-// Full PT/YT lifecycle against a kamino-backed SY.
+// Full PT/YT lifecycle against a kamino-backed SY (KycMode::None).
 //
-// Deferred: this block would exercise strip → tradePt → merge end-to-end with
-// a vault wired to kamino_sy_adapter. It requires a vault-side CpiAccounts
-// layout for the adapter's deposit_sy / withdraw_sy — same shape the router
-// crate already produces for the generic adapter, but with kamino_sy_adapter
-// substituted. That wiring is NOT part of M-KYC-5 (out-of-scope per
-// KYC_PASSTHROUGH_PLAN.md §4.6 — it belongs in a later router/curator update).
+// End-to-end validation that clearstone_core's post-M-KYC-4 `transfer_checked`
+// migration works against a non-generic SY adapter. Exercises:
+//   - setupVault + setupMarket wired to kamino_sy_adapter (8-slot ALT, incl.
+//     klend_reserve readonly slot)
+//   - strip: user underlying → klend.deposit → adapter.deposit_sy → core mints PT+YT
+//   - tradePt: AMM swap on real PT/SY escrows
+//   - merge: burn PT+YT → adapter.withdraw_sy → klend.redeem → user underlying
 //
-// When that wiring lands, the block below should cover:
-//   (1) KycMode::None — strip → tradePt → merge cycle succeeds.
-//   (2) KycMode::GovernorWhitelist after M-KYC-3 — same cycle succeeds for a
-//       whitelisted user, rejects for a non-whitelisted mint_to destination.
-//   (3) Regression: existing generic_exchange_rate_sy tests still pass
-//       (covered by the rest of the clearstone-core.ts suite, implicitly).
+// Separately validates the KycMode::GovernorWhitelist path (event-emission
+// stand-in — see M-KYC-3 in KYC_PASSTHROUGH_PLAN.md).
 // =============================================================================
 describe("kamino_sy_adapter :: full PT/YT lifecycle", () => {
-  it.skip(
-    "strip → tradePt → merge cycle against a KycMode::None kamino vault",
-    async () => {
-      // TODO: implement once router/curator wiring for kamino_sy_adapter lands.
-    }
-  );
+  it("strip → tradePt → merge cycle against a KycMode::None kamino vault", async () => {
+    // --- 0. Underlying mint + mock klend reserve ---
+    const underlyingMint = await createBaseMint(provider.connection, payer, 6);
+    const reserve = await initMockKlendReserve({
+      program: klend,
+      payer,
+      liquidityMint: underlyingMint,
+    });
+
+    // --- 1. Adapter SY market (KycMode::None — retail path) ---
+    const curator = await fundedUser();
+    const kaminoHandles = await initKaminoSyMarketNoKyc({
+      adapter,
+      klend,
+      payer,
+      curator,
+      underlyingMint,
+      klendReserve: reserve,
+    });
+
+    // --- 2. Seed payer with underlying + SY for vault/market init ---
+    const payerUnderlyingAta = await createAta(
+      provider.connection,
+      payer,
+      underlyingMint,
+      payer.publicKey
+    );
+    await mintToUser(
+      provider.connection,
+      payer,
+      underlyingMint,
+      payer,
+      payerUnderlyingAta.address,
+      10_000_000_000n
+    );
+    const payerSyAta = await mintSyKamino({
+      adapter,
+      klend,
+      connection: provider.connection,
+      user: payer,
+      handles: kaminoHandles,
+      amountUnderlying: new BN(5_000_000_000),
+    });
+
+    // --- 3. Core vault over kamino adapter ---
+    const clockAccount = await provider.connection.getAccountInfo(
+      anchor.web3.SYSVAR_CLOCK_PUBKEY
+    );
+    const onchainNow = Number(clockAccount!.data.readBigInt64LE(32));
+
+    const vault = await setupVaultOverKamino({
+      core,
+      adapter,
+      connection: provider.connection,
+      payer,
+      curator: payer.publicKey,
+      kaminoHandles,
+      startTimestamp: onchainNow,
+      duration: 86_400 * 30,
+      interestBpsFee: 100,
+      creatorFeeBps: 500,
+      maxPySupply: new BN("1000000000000"),
+      minOpSizeStrip: new BN(1),
+      minOpSizeMerge: new BN(1),
+    });
+
+    // --- 4. Pre-strip PT+YT ATAs for payer (needed to seed the market) ---
+    const payerPtAta = await getOrCreateAssociatedTokenAccount(
+      provider.connection,
+      payer,
+      vault.mintPt,
+      payer.publicKey
+    );
+    const payerYtAta = await getOrCreateAssociatedTokenAccount(
+      provider.connection,
+      payer,
+      vault.mintYt,
+      payer.publicKey
+    );
+
+    // Strip some SY for the seeder so they can seed the market.
+    await strip({
+      core,
+      syProgram: adapter.programId,
+      depositor: payer,
+      vault,
+      sySrc: payerSyAta,
+      ptDst: payerPtAta.address,
+      ytDst: payerYtAta.address,
+      mintSy: kaminoHandles.syMint,
+      amount: new BN(10_000_000),
+      extraAccounts: kaminoAdapterExtraAccountsForVault(
+        kaminoHandles,
+        vault.vaultPosition
+      ),
+    });
+
+    // --- 5. Market seed ---
+    const market = await setupMarketOverKamino({
+      core,
+      adapter,
+      connection: provider.connection,
+      payer,
+      curator: payer.publicKey,
+      vaultHandles: vault,
+      kaminoHandles,
+      seedId: 1,
+      ptInit: new BN(1_000_000),
+      syInit: new BN(1_000_000),
+      syExchangeRate: new BN(1),
+      lnFeeRateRoot: 0.001,
+      rateScalarRoot: 1.0,
+      initRateAnchor: 1.05,
+      feeTreasurySyBps: 200,
+      creatorFeeBps: 500,
+      ptSrc: payerPtAta.address,
+      sySrc: payerSyAta,
+    });
+
+    // --- 6. End-user strip: SY → PT + YT ---
+    const user = await fundedUser();
+    const userUnderlyingAta = await createAta(
+      provider.connection,
+      payer,
+      underlyingMint,
+      user.publicKey
+    );
+    await mintToUser(
+      provider.connection,
+      payer,
+      underlyingMint,
+      payer,
+      userUnderlyingAta.address,
+      1_000_000_000n
+    );
+    const userSyAta = await mintSyKamino({
+      adapter,
+      klend,
+      connection: provider.connection,
+      user,
+      handles: kaminoHandles,
+      amountUnderlying: new BN(100_000_000),
+    });
+    const userPtAta = (
+      await getOrCreateAssociatedTokenAccount(
+        provider.connection,
+        payer,
+        vault.mintPt,
+        user.publicKey
+      )
+    ).address;
+    const userYtAta = (
+      await getOrCreateAssociatedTokenAccount(
+        provider.connection,
+        payer,
+        vault.mintYt,
+        user.publicKey
+      )
+    ).address;
+
+    const stripAmount = new BN(50_000_000);
+    await strip({
+      core,
+      syProgram: adapter.programId,
+      depositor: user,
+      vault,
+      sySrc: userSyAta,
+      ptDst: userPtAta,
+      ytDst: userYtAta,
+      mintSy: kaminoHandles.syMint,
+      amount: stripAmount,
+      extraAccounts: kaminoAdapterExtraAccountsForVault(
+        kaminoHandles,
+        vault.vaultPosition
+      ),
+    });
+
+    const ptAfterStrip = await getAccount(provider.connection, userPtAta);
+    const ytAfterStrip = await getAccount(provider.connection, userYtAta);
+    assert.ok(ptAfterStrip.amount > 0n, "strip must mint PT");
+    assert.ok(ytAfterStrip.amount > 0n, "strip must mint YT");
+    // At exchange rate = 1.0 the strip is 1:1 (minus rounding).
+    assert.equal(ptAfterStrip.amount.toString(), stripAmount.toString());
+
+    // --- 7. tradePt: user sells a slice of PT for SY ---
+    const sellAmount = new BN(100_000);
+    const syBeforeTrade = await getAccount(provider.connection, userSyAta);
+    await tradePt({
+      core,
+      adapter: adapter as any, // fixture typed to generic; program id is what matters
+      trader: user,
+      sy: {
+        // SyMarketHandles-compatible subset the fixture reads:
+        syMarket: kaminoHandles.syMetadata,
+        syMint: kaminoHandles.syMint,
+        baseVault: PublicKey.default,
+        poolEscrow: kaminoHandles.poolEscrow,
+        baseMint: underlyingMint,
+        authority: kaminoHandles.curator,
+      },
+      market,
+      traderSy: userSyAta,
+      traderPt: userPtAta,
+      netTraderPt: sellAmount.neg(),
+      syConstraint: new BN(1), // minimum acceptable SY out
+    });
+    const syAfterTrade = await getAccount(provider.connection, userSyAta);
+    assert.ok(
+      syAfterTrade.amount > syBeforeTrade.amount,
+      "sellPt must credit user with SY"
+    );
+    const ptAfterTrade = await getAccount(provider.connection, userPtAta);
+    assert.equal(
+      ptAfterTrade.amount,
+      ptAfterStrip.amount - BigInt(sellAmount.toString()),
+      "PT balance must drop by sellAmount"
+    );
+
+    // --- 8. merge: remaining PT + equal YT → SY ---
+    const mergeAmount = ptAfterTrade.amount; // burn full remaining PT
+    await merge({
+      core,
+      adapter: adapter as any,
+      owner: user,
+      sy: {
+        syMarket: kaminoHandles.syMetadata,
+        syMint: kaminoHandles.syMint,
+        baseVault: PublicKey.default,
+        poolEscrow: kaminoHandles.poolEscrow,
+        baseMint: underlyingMint,
+        authority: kaminoHandles.curator,
+      },
+      vault,
+      syDst: userSyAta,
+      ytSrc: userYtAta,
+      ptSrc: userPtAta,
+      amount: new BN(mergeAmount.toString()),
+    });
+
+    const ptFinal = await getAccount(provider.connection, userPtAta);
+    const ytFinal = await getAccount(provider.connection, userYtAta);
+    const syFinal = await getAccount(provider.connection, userSyAta);
+    assert.equal(ptFinal.amount.toString(), "0", "all PT burned after merge");
+    assert.ok(ytFinal.amount < ytAfterStrip.amount, "YT burned on merge");
+    assert.ok(syFinal.amount > syAfterTrade.amount, "SY credited on merge");
+  });
 });

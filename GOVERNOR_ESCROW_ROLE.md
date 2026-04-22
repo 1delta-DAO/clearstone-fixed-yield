@@ -5,6 +5,48 @@
 > This is the blocker PR for the clearstone-fixed-yield KYC pass-through work
 > (see [KYC_PASSTHROUGH_PLAN.md](KYC_PASSTHROUGH_PLAN.md) §3.4 / §4.4).
 
+> **Ready-made patch.** The diff is already implemented and compile-verified
+> against `main` — apply [GOVERNOR_ESCROW_ROLE.patch](GOVERNOR_ESCROW_ROLE.patch)
+> directly:
+>
+> ```bash
+> cd /path/to/clearstone-finance
+> git checkout -b add-escrow-role
+> git am /path/to/clearstone-fixed-yield/GOVERNOR_ESCROW_ROLE.patch
+> # -> run the tests in §1.4 and §2.4 of this doc, then open the PR.
+> ```
+>
+> The sections below document what the patch does and why, for code review.
+> The *actual* step-by-step is: apply the patch, add the tests, tag, done.
+
+## Summary of the landed patch
+
+**delta-mint** (`packages/programs/programs/delta-mint/src/lib.rs`):
+- Append `WhitelistRole::Escrow` variant (discriminant 2).
+- Add `add_escrow_to_whitelist` instruction — mirrors `add_liquidator` but
+  sets `role = Escrow`.
+- Add `add_escrow_to_whitelist_with_co_authority` instruction — mirrors
+  `add_to_whitelist_with_co_authority` but sets `role = Escrow`.
+- Rename error `LiquidatorCannotMint` → `NonHolderCannotMint`. Error code
+  (6002) stays stable because the variant position is unchanged; only the
+  string identifier and message change. Raw-code matchers unaffected;
+  string matchers on `/LiquidatorCannotMint/` need to migrate to
+  `/NonHolderCannotMint/`.
+- `mint_to` is untouched — its existing `require!(role == Holder, ...)`
+  check already rejects both `Liquidator` and `Escrow`.
+
+**governor** (`packages/programs/programs/governor/src/lib.rs`):
+- Append `ParticipantRole::Escrow` variant.
+- `add_participant` match arm for `Escrow` → CPI
+  `delta_cpi::add_escrow_to_whitelist`.
+- `add_participant_via_pool` match arm for `Escrow` → CPI
+  `delta_cpi::add_escrow_to_whitelist_with_co_authority`.
+
+Total: 2 files changed, 81 lines added, 5 lines modified. Both programs
+compile cleanly (`cargo check --workspace` from
+`packages/programs/` finishes with only pre-existing
+`unexpected cfg condition` warnings).
+
 ## Why
 
 Clearstone core owns PDAs — `escrow_sy`, `token_fee_treasury_sy`, `yield_position`'s SY
@@ -328,13 +370,12 @@ anchor keys list | diff - /tmp/preexisting-ids.txt
 
 ## PR checklist
 
-- [ ] delta-mint: `WhitelistRole::Escrow` variant appended (not inserted).
-- [ ] delta-mint: `mint_to` rejects `Escrow`.
-- [ ] delta-mint: unit test proves reject + token-transfer-in works.
-- [ ] governor: `ParticipantRole::Escrow` variant appended.
-- [ ] governor: `add_participant` + `add_participant_via_pool` route Escrow →
-      `add_to_whitelist` (not `add_liquidator`).
-- [ ] governor: integration test covers both pre- and post-activation paths.
-- [ ] `anchor keys list` unchanged vs. pre-PR snapshot.
-- [ ] IDLs regenerated; TS types re-exported.
-- [ ] Tag cut for clearstone-fixed-yield to Cargo-pin against.
+- [x] delta-mint: `WhitelistRole::Escrow` variant appended (not inserted). *(in patch)*
+- [x] delta-mint: `mint_to` rejects `Escrow`. *(inherited — the existing Holder-only check already covers Escrow)*
+- [ ] delta-mint: unit test proves reject + token-transfer-in works. *(§1.4 of this doc)*
+- [x] governor: `ParticipantRole::Escrow` variant appended. *(in patch)*
+- [x] governor: `add_participant` + `add_participant_via_pool` route Escrow → delta-mint's `add_escrow_to_whitelist[_with_co_authority]`. *(in patch)*
+- [ ] governor: integration test covers both pre- and post-activation paths. *(§2.4 of this doc)*
+- [ ] `anchor keys list` unchanged vs. pre-PR snapshot. *(verify after patch-apply)*
+- [ ] IDLs regenerated; TS types re-exported. *(verify after patch-apply)*
+- [ ] Tag cut for clearstone-fixed-yield to Cargo-pin against. *(release step)*

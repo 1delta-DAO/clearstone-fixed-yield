@@ -21,11 +21,29 @@ import {
   getOrCreateAssociatedTokenAccount,
   getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 
+import type { ClearstoneCore } from "../target/types/clearstone_core";
 import type { MockKlend } from "../target/types/mock_klend";
 import type { KaminoSyAdapter } from "../target/types/kamino_sy_adapter";
-import { numberFromU64 } from "./fixtures";
+import {
+  CU_LIMIT_IX,
+  METADATA_PROGRAM_ID,
+  VaultHandles,
+  MarketHandles,
+  createAndExtendAlt,
+  findEscrowYt,
+  findMarket,
+  findMarketEscrow,
+  findMintLp,
+  findMintPt,
+  findMintYt,
+  findPtMetadata,
+  findVaultAuthority,
+  findYieldPosition,
+  numberFromU64,
+} from "./fixtures";
 
 // ===== Seeds =====
 
@@ -424,4 +442,385 @@ export function kaminoAdapterExtraAccountsForVault(
     { pubkey: handles.klendReserve, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
   ];
+}
+
+// ===== CpiAccounts for the kamino adapter =====
+//
+// The kamino adapter's SY-interface Accounts structs carry one extra account
+// over the generic adapter — `klend_reserve` (readonly) — because get_sy_state
+// reads the exchange rate from it and deposit_sy/withdraw_sy use it for the
+// has_one constraint on SyMetadata. See DepositSy/WithdrawSy in
+// reference_adapters/kamino_sy_adapter/src/lib.rs.
+
+export interface KaminoAdapterAltIndexes {
+  owner: number;
+  syMetadata: number;
+  syMint: number;
+  ownerSy: number;
+  poolEscrow: number;
+  position: number;
+  klendReserve: number;
+  tokenProgram: number;
+}
+
+export function buildKaminoAdapterCpiAccounts(idx: KaminoAdapterAltIndexes): any {
+  const ctx = (altIndex: number, writable: boolean, signer = false) => ({
+    altIndex,
+    isSigner: signer,
+    isWritable: writable,
+  });
+  return {
+    // GetSyState: sy_metadata, klend_reserve
+    getSyState: [ctx(idx.syMetadata, false), ctx(idx.klendReserve, false)],
+    // DepositSy: owner(Signer), sy_metadata (has_one), sy_mint, sy_src, pool_escrow, position, klend_reserve, token_program
+    depositSy: [
+      ctx(idx.owner, false, true),
+      ctx(idx.syMetadata, false),
+      ctx(idx.syMint, true),
+      ctx(idx.ownerSy, true),
+      ctx(idx.poolEscrow, true),
+      ctx(idx.position, true),
+      ctx(idx.klendReserve, false),
+      ctx(idx.tokenProgram, false),
+    ],
+    // WithdrawSy: same shape with sy_dst replacing sy_src (no owner signer — market PDA signs via CPI seeds).
+    withdrawSy: [
+      ctx(idx.owner, false, true),
+      ctx(idx.syMetadata, false),
+      ctx(idx.syMint, true),
+      ctx(idx.ownerSy, true),
+      ctx(idx.poolEscrow, true),
+      ctx(idx.position, true),
+      ctx(idx.klendReserve, false),
+      ctx(idx.tokenProgram, false),
+    ],
+    // Kamino adapter has no emissions.
+    claimEmission: [] as any[][],
+    // GetPosition: sy_metadata, position
+    getPositionState: [ctx(idx.syMetadata, false), ctx(idx.position, false)],
+  };
+}
+
+// ===== setupVaultOverKamino =====
+
+export interface SetupVaultOverKaminoParams {
+  core: Program<ClearstoneCore>;
+  adapter: Program<KaminoSyAdapter>;
+  connection: Connection;
+  payer: Keypair;
+  curator: PublicKey;
+  kaminoHandles: KaminoSyHandles;
+  startTimestamp: number;
+  duration: number;
+  interestBpsFee: number;
+  creatorFeeBps: number;
+  maxPySupply: anchor.BN;
+  minOpSizeStrip: anchor.BN;
+  minOpSizeMerge: anchor.BN;
+}
+
+export async function setupVaultOverKamino(
+  params: SetupVaultOverKaminoParams
+): Promise<VaultHandles> {
+  const {
+    core,
+    adapter,
+    connection,
+    payer,
+    curator,
+    kaminoHandles,
+    startTimestamp,
+    duration,
+    interestBpsFee,
+    creatorFeeBps,
+    maxPySupply,
+    minOpSizeStrip,
+    minOpSizeMerge,
+  } = params;
+
+  const corePid = core.programId;
+  const adapterPid = adapter.programId;
+
+  const vault = Keypair.generate();
+  const [authority] = findVaultAuthority(vault.publicKey, corePid);
+  const [mintPt] = findMintPt(vault.publicKey, corePid);
+  const [mintYt] = findMintYt(vault.publicKey, corePid);
+  const [escrowYt] = findEscrowYt(vault.publicKey, corePid);
+  const [yieldPosition] = findYieldPosition(vault.publicKey, authority, corePid);
+  const [ptMetadata] = findPtMetadata(mintPt);
+
+  const escrowSy = getAssociatedTokenAddressSync(
+    kaminoHandles.syMint,
+    authority,
+    true
+  );
+
+  const [vaultPosition] = findAdapterPersonalPosition(
+    kaminoHandles.syMetadata,
+    authority,
+    adapterPid
+  );
+
+  const treasuryAta = (
+    await getOrCreateAssociatedTokenAccount(
+      connection,
+      payer,
+      kaminoHandles.syMint,
+      payer.publicKey
+    )
+  ).address;
+
+  // ALT layout — 8 slots for kamino (vs 7 for generic).
+  //   0: owner (= vault authority)
+  //   1: sy_metadata
+  //   2: sy_mint
+  //   3: ownerSy (= vault's escrow_sy ATA)
+  //   4: pool_escrow
+  //   5: vault's position
+  //   6: klend_reserve
+  //   7: token_program
+  const altAddresses = [
+    authority,
+    kaminoHandles.syMetadata,
+    kaminoHandles.syMint,
+    escrowSy,
+    kaminoHandles.poolEscrow,
+    vaultPosition,
+    kaminoHandles.klendReserve,
+    TOKEN_PROGRAM_ID,
+  ];
+  const alt = await createAndExtendAlt({ connection, payer, addresses: altAddresses });
+
+  const cpiAccounts = buildKaminoAdapterCpiAccounts({
+    owner: 0,
+    syMetadata: 1,
+    syMint: 2,
+    ownerSy: 3,
+    poolEscrow: 4,
+    position: 5,
+    klendReserve: 6,
+    tokenProgram: 7,
+  });
+
+  // remaining_accounts: init_personal_account positional 5 on the kamino adapter
+  // (payer, owner, sy_metadata, position, system_program).
+  const remainingAccounts = [
+    { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+    { pubkey: authority, isSigner: false, isWritable: false },
+    { pubkey: kaminoHandles.syMetadata, isSigner: false, isWritable: false },
+    { pubkey: vaultPosition, isSigner: false, isWritable: true },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+  ];
+
+  await core.methods
+    .initializeVault(
+      startTimestamp,
+      duration,
+      interestBpsFee,
+      cpiAccounts,
+      minOpSizeStrip,
+      minOpSizeMerge,
+      "PT KAMINO TEST",
+      "tPTk",
+      "https://example.com/pt-k.json",
+      curator,
+      creatorFeeBps,
+      maxPySupply,
+      [],
+      false
+    )
+    .accounts({
+      payer: payer.publicKey,
+      authority,
+      vault: vault.publicKey,
+      mintPt,
+      mintYt,
+      escrowYt,
+      escrowSy,
+      mintSy: kaminoHandles.syMint,
+      systemProgram: SystemProgram.programId,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      treasuryTokenAccount: treasuryAta,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      syProgram: adapterPid,
+      addressLookupTable: alt,
+      yieldPosition,
+      metadata: ptMetadata,
+      tokenMetadataProgram: METADATA_PROGRAM_ID,
+    } as any)
+    .remainingAccounts(remainingAccounts)
+    .preInstructions([CU_LIMIT_IX])
+    .signers([payer, vault])
+    .rpc();
+
+  return {
+    vault,
+    authority,
+    mintPt,
+    mintYt,
+    escrowYt,
+    escrowSy,
+    yieldPosition,
+    alt,
+    treasuryAta,
+    vaultPosition,
+    curator,
+  };
+}
+
+// ===== setupMarketOverKamino =====
+
+export interface SetupMarketOverKaminoParams {
+  core: Program<ClearstoneCore>;
+  adapter: Program<KaminoSyAdapter>;
+  connection: Connection;
+  payer: Keypair;
+  curator: PublicKey;
+  vaultHandles: VaultHandles;
+  kaminoHandles: KaminoSyHandles;
+  seedId: number;
+  ptInit: anchor.BN;
+  syInit: anchor.BN;
+  syExchangeRate: anchor.BN;
+  lnFeeRateRoot: number;
+  rateScalarRoot: number;
+  initRateAnchor: number;
+  feeTreasurySyBps: number;
+  creatorFeeBps: number;
+  ptSrc: PublicKey;
+  sySrc: PublicKey;
+}
+
+export async function setupMarketOverKamino(
+  params: SetupMarketOverKaminoParams
+): Promise<MarketHandles> {
+  const {
+    core,
+    adapter,
+    connection,
+    payer,
+    curator,
+    vaultHandles,
+    kaminoHandles,
+    seedId,
+    ptInit,
+    syInit,
+    syExchangeRate,
+    lnFeeRateRoot,
+    rateScalarRoot,
+    initRateAnchor,
+    feeTreasurySyBps,
+    creatorFeeBps,
+    ptSrc,
+    sySrc,
+  } = params;
+
+  const corePid = core.programId;
+  const adapterPid = adapter.programId;
+
+  const [market] = findMarket(vaultHandles.vault.publicKey, seedId, corePid);
+  const [mintLp] = findMintLp(market, corePid);
+  const [escrowPt] = findMarketEscrow(market, "escrow_pt", corePid);
+  const [escrowSy] = findMarketEscrow(market, "escrow_sy", corePid);
+
+  const [marketPosition] = findAdapterPersonalPosition(
+    kaminoHandles.syMetadata,
+    market,
+    adapterPid
+  );
+
+  const lpDst = getAssociatedTokenAddressSync(mintLp, payer.publicKey);
+
+  const tokenTreasuryFeeSy = (
+    await getOrCreateAssociatedTokenAccount(
+      connection,
+      payer,
+      kaminoHandles.syMint,
+      payer.publicKey
+    )
+  ).address;
+
+  const altAddresses = [
+    market,
+    kaminoHandles.syMetadata,
+    kaminoHandles.syMint,
+    escrowSy,
+    kaminoHandles.poolEscrow,
+    marketPosition,
+    kaminoHandles.klendReserve,
+    TOKEN_PROGRAM_ID,
+  ];
+  const alt = await createAndExtendAlt({ connection, payer, addresses: altAddresses });
+
+  const cpiAccounts = buildKaminoAdapterCpiAccounts({
+    owner: 0,
+    syMetadata: 1,
+    syMint: 2,
+    ownerSy: 3,
+    poolEscrow: 4,
+    position: 5,
+    klendReserve: 6,
+    tokenProgram: 7,
+  });
+
+  const remainingAccounts = [
+    { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+    { pubkey: market, isSigner: false, isWritable: false },
+    { pubkey: kaminoHandles.syMetadata, isSigner: false, isWritable: false },
+    { pubkey: marketPosition, isSigner: false, isWritable: true },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    { pubkey: kaminoHandles.poolEscrow, isSigner: false, isWritable: true },
+  ];
+
+  await core.methods
+    .initMarketTwo(
+      lnFeeRateRoot,
+      rateScalarRoot,
+      initRateAnchor,
+      numberFromU64(syExchangeRate) as any,
+      ptInit,
+      syInit,
+      feeTreasurySyBps,
+      cpiAccounts,
+      seedId,
+      curator,
+      creatorFeeBps
+    )
+    .accounts({
+      payer: payer.publicKey,
+      market,
+      vault: vaultHandles.vault.publicKey,
+      mintSy: kaminoHandles.syMint,
+      mintPt: vaultHandles.mintPt,
+      mintLp,
+      escrowPt,
+      escrowSy,
+      ptSrc,
+      sySrc,
+      lpDst,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      syProgram: adapterPid,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      addressLookupTable: alt,
+      tokenTreasuryFeeSy,
+    } as any)
+    .remainingAccounts(remainingAccounts)
+    .preInstructions([CU_LIMIT_IX])
+    .signers([payer])
+    .rpc();
+
+  return {
+    market,
+    mintLp,
+    escrowPt,
+    escrowSy,
+    escrowLp: PublicKey.default,
+    lpDst,
+    tokenTreasuryFeeSy,
+    alt,
+    marketPosition,
+    curator,
+    seedId,
+  };
 }
