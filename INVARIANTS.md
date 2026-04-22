@@ -13,6 +13,8 @@ enforcement and property).
 - **I-M\*** — Market invariants (AMM reserves and LP supply).
 - **I-C\*** — CPI / re-entrancy invariants.
 - **I-E\*** — Economic invariants (fees, curation).
+- **I-KYC\*** — KYC pass-through discipline (Token-2022 + optional
+  governor composability).
 
 ---
 
@@ -395,6 +397,119 @@ handler.
 
 ---
 
+## KYC pass-through invariants
+
+### I-KYC1 — All SY movements use `transfer_checked`
+
+**Statement.** Every SPL transfer of the SY token inside clearstone_core
+uses `anchor_spl::token_interface::transfer_checked` (the mint +
+decimals-checked form), never plain `token_2022::transfer`.
+
+**Why.** When the SY mint carries Token-2022 extensions (ConfidentialTransfer
+from delta-mint, or TransferHook from a future stricter backend), the
+plain `transfer` is deprecated and skips some extension-specific checks.
+`transfer_checked` is the supported path for any T2022 mint and is a
+no-op cost for plain SPL mints.
+
+**Where enforced.**
+[instructions/util.rs:sy_transfer_checked](programs/clearstone_core/src/instructions/util.rs) —
+the single helper that wraps `token_interface::transfer_checked`. Every
+SY-moving handler uses this exclusively (see I-KYC1 audit below). The
+plain `util::token_transfer` helper still exists for PT/YT/emission
+flows where mint extensions don't apply.
+
+Call sites — all use `sy_transfer_checked`:
+- [vault/strip.rs](programs/clearstone_core/src/instructions/vault/strip.rs)
+- [vault/merge.rs](programs/clearstone_core/src/instructions/vault/merge.rs)
+- [vault/collect_interest.rs](programs/clearstone_core/src/instructions/vault/collect_interest.rs)
+- [vault/admin/treasury/collect_treasury_interest.rs](programs/clearstone_core/src/instructions/vault/admin/treasury/collect_treasury_interest.rs)
+- [market_two/trade_pt.rs](programs/clearstone_core/src/instructions/market_two/trade_pt.rs)
+- [market_two/buy_yt.rs](programs/clearstone_core/src/instructions/market_two/buy_yt.rs)
+- [market_two/deposit_liquidity.rs](programs/clearstone_core/src/instructions/market_two/deposit_liquidity.rs)
+- [market_two/withdraw_liquidity.rs](programs/clearstone_core/src/instructions/market_two/withdraw_liquidity.rs)
+- [market_two/admin/market_two_init.rs](programs/clearstone_core/src/instructions/market_two/admin/market_two_init.rs)
+
+The `sell_yt` handler does NOT transfer SY directly — it flash-borrows PT
+and CPIs into `merge` for the SY output, inheriting I-KYC1 from there.
+
+**Tests.** Rust unit tests + `tests/clearstone-core.ts` SPL regression
+suite exercise every path; `tests/clearstone-kyc-pass-through.ts` verifies
+the Token-2022 path end-to-end against `mock_klend`.
+
+**Residual risk.** A future PR adding a new SY-moving instruction could
+reach for `token_2022::transfer` directly. Audit: grep
+`programs/clearstone_core/src/` for `token_2022::transfer` and `token_transfer(`.
+Permitted hits are PT, YT, and emission-reward movements only:
+
+- PT: `trade_pt.rs`, `sell_yt.rs`, `market_two_init.rs`.
+- YT: `deposit_yt.rs`, `withdraw_yt.rs`.
+- Emission rewards: `collect_emission.rs`, `collect_treasury_emission.rs`.
+
+Any SY movement *must* go through `sy_transfer_checked`.
+
+---
+
+### I-KYC2 — Core is governor-agnostic
+
+**Statement.** clearstone_core contains no CPI, import, or compile-time
+dependency on the external `clearstone-finance` governor or delta-mint
+programs.
+
+**Why.** The trust boundary for the core is "trusted, permissionless". Any
+governor dependency would pull external code into the audit scope and
+couple core's lifecycle to an external upgrade schedule. KYC composability
+is a curator-chosen adapter property, not a core property.
+
+**Where enforced.** By construction. `programs/clearstone_core/Cargo.toml`
+lists no `governor` / `delta_mint` / `clearstone-finance` dependency.
+All whitelist-creating CPIs live in
+[reference_adapters/kamino_sy_adapter/src/lib.rs](reference_adapters/kamino_sy_adapter/src/lib.rs),
+gated behind `KycMode::GovernorWhitelist` at init.
+
+**Tests.** Static — a compile check after this invariant is in place
+suffices.
+
+**Residual risk.** A future periphery program (curator, router) adding a
+governor CPI does NOT violate I-KYC2 — only core must stay
+governor-agnostic. Audit: grep
+`programs/clearstone_core/` (recursive) for `governor` / `delta_mint` /
+`Whitelist`. Zero hits expected.
+
+---
+
+### I-KYC3 — Core makes no SY-mint-owner assumption
+
+**Statement.** clearstone_core does not assume the SY mint's owner program
+is SPL Token or Token-2022 specifically. Every SY-touching ix accepts the
+mint via `InterfaceAccount<Mint>` and routes transfers through the
+Anchor `token_interface` indirection.
+
+**Why.** Lets the same core handle SPL, T2022+ConfidentialTransfer (current
+delta-mint d-tokens), and T2022+TransferHook (hypothetical stricter
+backend, flagged as a future upgrade path in KYC_PASSTHROUGH_PLAN §4.6)
+without code changes.
+
+**Where enforced.** Every `Accounts` struct that carries `mint_sy` types
+it as `InterfaceAccount<'info, anchor_spl::token_interface::Mint>` (not
+`Account<Mint>`). Every SY transfer uses
+`anchor_spl::token_interface::transfer_checked` (I-KYC1), which
+dispatches via the token-interface trait.
+
+**Tests.** Regression suite in `tests/clearstone-core.ts` runs against
+the SPL-mint `generic_exchange_rate_sy`; `tests/clearstone-kyc-pass-through.ts`
+runs against a T2022 SY mint from `kamino_sy_adapter`. Both pass under
+the same core binary.
+
+**Residual risk.** The TransferHook extension path is currently
+theoretical — adding it would require `sy_transfer_checked` callers to
+append extra-account-metas via
+`spl_transfer_hook_interface::onchain::add_extra_accounts_for_execute_cpi`
+before the CPI. That's a migration, not a runtime invariant failure. See
+[KYC_PASSTHROUGH_PLAN.md §4.6](KYC_PASSTHROUGH_PLAN.md) for the upgrade
+sketch.
+
+---
+
 ## Invariant-coverage audit checklist
 
 Run before every PR that touches state or CPI:
@@ -415,3 +530,11 @@ Run before every PR that touches state or CPI:
 - [ ] Creator-gated modify actions cannot violate I-E1 / I-E2.
 - [ ] No instruction takes two `Vault` or two `MarketTwo` accounts.
 - [ ] All `close` / realloc paths re-check curator signer.
+- [ ] Every SY transfer in `programs/clearstone_core/` goes through
+      `sy_transfer_checked` (I-KYC1). Grep for `token_2022::transfer`
+      and `token_transfer(` — only PT / YT / emission-reward sites are
+      permitted; any SY hit is a bug.
+- [ ] `programs/clearstone_core/Cargo.toml` has no `governor` /
+      `delta_mint` / `clearstone-finance` dependency (I-KYC2).
+- [ ] Every `Accounts` struct carrying `mint_sy` types it as
+      `InterfaceAccount<Mint>` (I-KYC3).

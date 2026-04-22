@@ -16,6 +16,7 @@ Versions / commits at audit kickoff go here when the tag is cut.
 
 - clearstone_core: program ID `EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC`
 - generic_exchange_rate_sy (reference): program ID `DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6`
+- kamino_sy_adapter (reference, KYC pass-through capable): program ID `29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd`
 
 ## In scope
 
@@ -27,6 +28,15 @@ Versions / commits at audit kickoff go here when the tag is cut.
   production adapter), but treat it as "what a minimally-safe SY
   integration looks like" and flag patterns that would be problematic
   if copied into a production adapter.
+- **[reference_adapters/kamino_sy_adapter/](reference_adapters/kamino_sy_adapter/)** —
+  Kamino-Lend-V2-wrapping SY adapter with optional KYC pass-through
+  (`KycMode::GovernorWhitelist`). Same "reference, not enforced" trust
+  tier as `generic_exchange_rate_sy`, but higher integration surface.
+  Note: the kamino reserve-layout decoder
+  ([lib.rs:read_exchange_rate](reference_adapters/kamino_sy_adapter/src/lib.rs))
+  is hardcoded to `mock_klend`'s Reserve layout. Swapping to real klend
+  is a one-function change — flag for any caller planning a production
+  deploy against live klend.
 - **[libraries/](libraries/)** — inherited from upstream Exponent. The
   math-critical ones (`precise_number`, `time_curve`) sit under every
   reserve calculation. Upstream audits exist (Ottersec, Offside, Certora
@@ -35,6 +45,17 @@ Versions / commits at audit kickoff go here when the tag is cut.
 
 ## Out of scope
 
+- **[reference_adapters/mock_klend/](reference_adapters/mock_klend/)** —
+  test-only Kamino Lend V2 stand-in. Never deployed to devnet/mainnet.
+  Skip.
+- **External governor composability** — the KYC pass-through flow
+  composes with the external
+  [`clearstone-finance` governor + delta-mint](https://github.com/1delta-DAO/clearstone-finance)
+  programs. Those live in a separate repo and audit. clearstone_core
+  makes no CPI into them (I-KYC2); the only coupling point is
+  `kamino_sy_adapter.init_sy_params` under `KycMode::GovernorWhitelist`.
+  Audit that surface from the adapter side; treat the external
+  governor+delta-mint as a separately-audited dependency.
 - **[periphery/clearstone_rewards/](periphery/clearstone_rewards/)** —
   scaffolded, not feature-complete. Not audit-ready. See FOLLOWUPS.md.
 - **[periphery/clearstone_curator/](periphery/clearstone_curator/)** —
@@ -82,6 +103,23 @@ is scoped to each individual SY CPI rather than the outer handler.
 
 - Fee cap is bounded by compile-time constant.
 - No modify path raises a fee.
+
+### KYC pass-through (I-KYC1 through I-KYC3)
+
+- Every SY transfer uses `transfer_checked` with the mint + decimals.
+  Plain `token_2022::transfer` is only used for PT (core-owned SPL).
+- clearstone_core has no build-time or runtime dependency on the external
+  governor / delta-mint programs. KYC wiring lives entirely in the
+  adapter.
+- Every `Accounts` struct carrying `mint_sy` types it as
+  `InterfaceAccount<Mint>` so the same core handles SPL, T2022+CT, and
+  T2022+TransferHook (future) mints without code changes.
+
+**Auditor guidance.** The clearstone_core surface does not enforce KYC —
+it's a pass-through. KYC is enforced at the delta-mint mint layer and
+becomes a curator-selected property of whichever SY adapter the vault is
+wired to. If the audit covers institutional deployments, also review the
+external governor + delta-mint repos separately.
 
 ## Known open items
 

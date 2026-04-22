@@ -1,0 +1,294 @@
+{
+  "address": "AKeo9L8sGnMABrsUs7gJAk8WLye62hSJ7ikZ6yytCGkv",
+  "metadata": {
+    "name": "mock_klend",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Test-only mock of Kamino Lend V2 for clearstone kamino_sy_adapter integration tests."
+  },
+  "instructions": [
+    {
+      "name": "deposit_reserve_liquidity",
+      "discriminator": [
+        169,
+        201,
+        30,
+        126,
+        6,
+        205,
+        102,
+        68
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "signer": true
+        },
+        {
+          "name": "reserve",
+          "writable": true
+        },
+        {
+          "name": "liquidity_mint"
+        },
+        {
+          "name": "liquidity_supply",
+          "writable": true
+        },
+        {
+          "name": "collateral_mint",
+          "writable": true
+        },
+        {
+          "name": "user_liquidity",
+          "writable": true
+        },
+        {
+          "name": "user_collateral",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_liquidity",
+          "type": "u64"
+        }
+      ],
+      "returns": "u64"
+    },
+    {
+      "name": "initialize_reserve",
+      "discriminator": [
+        91,
+        188,
+        92,
+        135,
+        153,
+        155,
+        112,
+        16
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "lending_market"
+        },
+        {
+          "name": "liquidity_mint"
+        },
+        {
+          "name": "reserve",
+          "writable": true
+        },
+        {
+          "name": "liquidity_supply",
+          "writable": true
+        },
+        {
+          "name": "collateral_mint",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program"
+        },
+        {
+          "name": "rent"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "poke_exchange_rate",
+      "discriminator": [
+        13,
+        104,
+        89,
+        126,
+        64,
+        108,
+        102,
+        176
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "reserve",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "new_rate",
+          "type": {
+            "defined": {
+              "name": "Number"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "redeem_reserve_collateral",
+      "discriminator": [
+        234,
+        117,
+        181,
+        125,
+        185,
+        142,
+        220,
+        29
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "signer": true
+        },
+        {
+          "name": "reserve",
+          "writable": true
+        },
+        {
+          "name": "liquidity_mint"
+        },
+        {
+          "name": "liquidity_supply",
+          "writable": true
+        },
+        {
+          "name": "collateral_mint",
+          "writable": true
+        },
+        {
+          "name": "user_liquidity",
+          "writable": true
+        },
+        {
+          "name": "user_collateral",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_collateral",
+          "type": "u64"
+        }
+      ],
+      "returns": "u64"
+    },
+    {
+      "name": "refresh_reserve",
+      "discriminator": [
+        2,
+        218,
+        138,
+        235,
+        79,
+        201,
+        25,
+        102
+      ],
+      "accounts": [
+        {
+          "name": "reserve"
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Reserve",
+      "discriminator": [
+        43,
+        242,
+        204,
+        202,
+        26,
+        247,
+        59,
+        127
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "ZeroAmount",
+      "msg": "Amount must be > 0"
+    },
+    {
+      "code": 6001,
+      "name": "InvalidExchangeRate",
+      "msg": "Exchange rate must be > 0"
+    }
+  ],
+  "types": [
+    {
+      "name": "Number",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "array": [
+              "u64",
+              4
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "Reserve",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "lending_market",
+            "type": "pubkey"
+          },
+          {
+            "name": "liquidity_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "liquidity_supply",
+            "type": "pubkey"
+          },
+          {
+            "name": "collateral_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "collateral_exchange_rate",
+            "type": {
+              "defined": {
+                "name": "Number"
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    }
+  ]
+}

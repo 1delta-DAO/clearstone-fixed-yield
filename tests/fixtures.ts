@@ -1141,14 +1141,26 @@ export interface StripArgs {
   sySrc: PublicKey;
   ptDst: PublicKey;
   ytDst: PublicKey;
+  /** SY mint — required for transfer_checked (M-KYC-4). */
+  mintSy: PublicKey;
   amount: anchor.BN;
   /** Extra accounts for the SY CPI — adapter-specific. */
   extraAccounts: anchor.web3.AccountMeta[];
 }
 
 export async function strip(args: StripArgs): Promise<string> {
-  const { core, syProgram, depositor, vault, sySrc, ptDst, ytDst, amount, extraAccounts } =
-    args;
+  const {
+    core,
+    syProgram,
+    depositor,
+    vault,
+    sySrc,
+    ptDst,
+    ytDst,
+    mintSy,
+    amount,
+    extraAccounts,
+  } = args;
 
   return core.methods
     .strip(amount)
@@ -1162,6 +1174,7 @@ export async function strip(args: StripArgs): Promise<string> {
       ptDst,
       mintYt: vault.mintYt,
       mintPt: vault.mintPt,
+      mintSy,
       tokenProgram: TOKEN_PROGRAM_ID,
       addressLookupTable: vault.alt,
       syProgram,
@@ -1193,6 +1206,7 @@ export async function stripWithGenericAdapter(args: {
     sySrc: args.sySrc,
     ptDst: args.ptDst,
     ytDst: args.ytDst,
+    mintSy: args.sy.syMint,
     amount: args.amount,
     extraAccounts: adapterExtraAccountsForVault(args.sy, args.vault.vaultPosition),
   });
@@ -1225,6 +1239,7 @@ export async function merge(args: MergeArgs): Promise<string> {
       ptSrc,
       mintYt: vault.mintYt,
       mintPt: vault.mintPt,
+      mintSy: sy.syMint,
       tokenProgram: TOKEN_PROGRAM_ID,
       syProgram: adapter.programId,
       addressLookupTable: vault.alt,
@@ -1276,6 +1291,7 @@ export async function depositLiquidity(args: DepositLiquidityArgs): Promise<stri
       tokenSyEscrow: market.escrowSy,
       tokenLpDst,
       mintLp: market.mintLp,
+      mintSy: sy.syMint,
       addressLookupTable: market.alt,
       tokenProgram: TOKEN_PROGRAM_ID,
       syProgram: adapter.programId,
@@ -1326,6 +1342,7 @@ export async function withdrawLiquidity(args: WithdrawLiquidityArgs): Promise<st
       tokenSyEscrow: market.escrowSy,
       tokenLpSrc,
       mintLp: market.mintLp,
+      mintSy: sy.syMint,
       addressLookupTable: market.alt,
       tokenProgram: TOKEN_PROGRAM_ID,
       syProgram: adapter.programId,
@@ -1367,6 +1384,7 @@ export async function tradePt(args: TradePtArgs): Promise<string> {
       tokenProgram: TOKEN_PROGRAM_ID,
       syProgram: adapter.programId,
       tokenFeeTreasurySy: market.tokenTreasuryFeeSy,
+      mintSy: sy.syMint,
     } as any)
     .remainingAccounts(adapterExtraAccountsForMarket(sy, market.marketPosition))
     .preInstructions([CU_LIMIT_IX])

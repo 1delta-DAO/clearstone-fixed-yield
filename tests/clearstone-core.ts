@@ -485,6 +485,7 @@ describe("clearstone-core :: malicious-SY isolation", () => {
         sySrc: m.userSyAta,
         ptDst: m.userPtAta,
         ytDst: m.userYtAta,
+        mintSy: m.nonsenseHandles.syMint,
         amount: new BN(1_000),
         extraAccounts: [
           { pubkey: m.nonsenseHandles.syMarket, isSigner: false, isWritable: false },
@@ -508,6 +509,7 @@ describe("clearstone-core :: malicious-SY isolation", () => {
         sySrc: m.userSyAta,
         ptDst: m.userPtAta,
         ytDst: m.userYtAta,
+        mintSy: m.nonsenseHandles.syMint,
         amount: new BN(1_000),
         extraAccounts: [
           { pubkey: m.nonsenseHandles.syMarket, isSigner: false, isWritable: false },
@@ -538,6 +540,7 @@ describe("clearstone-core :: malicious-SY isolation", () => {
         sySrc: m.userSyAta,
         ptDst: m.userPtAta,
         ytDst: m.userYtAta,
+        mintSy: m.nonsenseHandles.syMint,
         amount: new BN(1_000),
         extraAccounts: [
           { pubkey: m.nonsenseHandles.syMarket, isSigner: false, isWritable: false },
@@ -706,6 +709,7 @@ describe("clearstone-core :: reentrancy (runtime mock)", () => {
           ptDst: s.depositorPt,
           mintYt: s.vault.mintYt,
           mintPt: s.vault.mintPt,
+          mintSy: s.syMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           addressLookupTable: s.vault.alt,
           syProgram: reentrant.programId,
@@ -776,6 +780,7 @@ describe("clearstone-core :: reentrancy (runtime mock)", () => {
         ptDst: s.depositorPt,
         mintYt: s.vault.mintYt,
         mintPt: s.vault.mintPt,
+        mintSy: s.syMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         addressLookupTable: s.vault.alt,
         syProgram: reentrant.programId,
@@ -809,6 +814,7 @@ describe("clearstone-core :: reentrancy (runtime mock)", () => {
           ptSrc: s.depositorPt,
           mintYt: s.vault.mintYt,
           mintPt: s.vault.mintPt,
+          mintSy: s.syMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           syProgram: reentrant.programId,
           addressLookupTable: s.vault.alt,

@@ -219,15 +219,55 @@ the virtualized view barely moves — this is what I-M3 buys you.
                    post-maturity SY appreciation (lambo fund).
 ```
 
+## KYC pass-through (optional)
+
+Clearstone core stays permissionless and governor-agnostic. A curator who
+wants a KYC-gated market composes the same primitives with one additional
+program:
+
+```
+  KYC'd user ──▶ clearstone-finance governor (external repo)
+                       │  delta-mint's whitelist entry at mint time
+                       ▼
+  dUSDY etc (Token-2022 + ConfidentialTransfer, whitelist-gated mint)
+                       │
+                       ├──▶ Kamino Lend V2 reserve (permissionless)
+                       │
+                       └──▶ clearstone_core (this repo) — strip / trade / merge
+```
+
+The coupling point is [kamino_sy_adapter](reference_adapters/kamino_sy_adapter/)
+and its `KycMode` parameter at init:
+
+- `KycMode::None` — retail path. Adapter makes no governor CPIs. Identical
+  runtime to a vanilla SY adapter.
+- `KycMode::GovernorWhitelist { .. }` — institutional path. At init, the
+  adapter CPIs the external governor to whitelist clearstone_core's
+  `escrow_sy` and `token_fee_treasury_sy` PDAs so delta-mint's mint-time
+  gate accepts them as eligible holders. Runtime unchanged — all SY moves
+  inside core go through Token-2022 `transfer_checked`.
+
+Core itself has no awareness of governor / delta-mint / KYC. Everything
+KYC-specific is in the adapter and can be swapped out for a different KYC
+backend without touching core.
+
+See [KYC_PASSTHROUGH_PLAN.md](KYC_PASSTHROUGH_PLAN.md) for the full
+implementation blueprint and [GOVERNOR_ESCROW_ROLE.md](GOVERNOR_ESCROW_ROLE.md)
+for the external-repo coordination PR.
+
 ## File index
 
 - Core state: [vault.rs](programs/clearstone_core/src/state/vault.rs),
   [market_two.rs](programs/clearstone_core/src/state/market_two.rs).
 - Core instructions: [src/instructions/](programs/clearstone_core/src/instructions/).
 - SY CPI wrappers (guarded): [utils/sy_cpi.rs](programs/clearstone_core/src/utils/sy_cpi.rs).
+- SY token-transfer helper (`transfer_checked`): [instructions/util.rs](programs/clearstone_core/src/instructions/util.rs).
 - Reentrancy helpers: [reentrancy.rs](programs/clearstone_core/src/reentrancy.rs).
 - Compile-time constants: [constants.rs](programs/clearstone_core/src/constants.rs).
-- Reference SY adapter: [reference_adapters/generic_exchange_rate_sy/](reference_adapters/generic_exchange_rate_sy/src/lib.rs).
+- Reference SY adapters:
+  - [generic_exchange_rate_sy](reference_adapters/generic_exchange_rate_sy/src/lib.rs) — pokable exchange rate, default retail path.
+  - [kamino_sy_adapter](reference_adapters/kamino_sy_adapter/src/lib.rs) — wraps a Kamino Lend V2 reserve with optional `KycMode::GovernorWhitelist` wiring.
+  - [mock_klend](reference_adapters/mock_klend/src/lib.rs) — test-only klend stand-in.
 - Test-only nonsense adapter: [reference_adapters/malicious_sy_nonsense/](reference_adapters/malicious_sy_nonsense/src/lib.rs).
 - Router (base-asset UX): [periphery/clearstone_router/](periphery/clearstone_router/src/lib.rs).
-- Test helpers: [tests/fixtures.ts](tests/fixtures.ts).
+- Test helpers: [tests/fixtures.ts](tests/fixtures.ts), [tests/kamino_fixtures.ts](tests/kamino_fixtures.ts).

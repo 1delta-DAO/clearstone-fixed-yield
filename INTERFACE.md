@@ -152,12 +152,44 @@ From [error.rs](programs/clearstone_core/src/error.rs):
   `DurationOutOfBounds`, `StartTimestampInPast`, `MinOperationSizeZero`,
   `ImmutablePostInit`.
 
-## Reference SY adapter
+## SY-mint account on token-moving ixs (post M-KYC-4)
 
-[generic_exchange_rate_sy](reference_adapters/generic_exchange_rate_sy/src/lib.rs)
-implements the SY interface that core's `utils/sy_cpi.rs` calls. The
-10-discriminator map lives in the adapter's lib.rs header comment. Program ID
-(localnet): `DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6`.
+Every instruction that transfers SY now carries `mint_sy: InterfaceAccount<Mint>`
+in its Accounts struct — required for Token-2022 `transfer_checked` and
+constrained via `has_one = mint_sy` on the vault/market. Affected ixs:
+
+- `strip`, `merge`, `collect_interest`, `collect_treasury_interest`
+- `trade_pt`, `buy_yt`, `sell_yt`
+- `market_two_deposit_liquidity`, `market_two_withdraw_liquidity`
+- `init_market_two` (already carried it pre-migration)
+
+Clients that built instructions with the pre-M-KYC-4 account layout must
+regenerate IDLs. This is an intentional IDL-breaking change (see
+[KYC_PASSTHROUGH_PLAN.md §3.2](KYC_PASSTHROUGH_PLAN.md)).
+
+PT transfers (`trade_pt`, `deposit_liquidity`, `withdraw_liquidity`,
+`buy_yt`, `sell_yt`) continue to use plain `token_2022::transfer` — PT
+mints are core-owned SPL without extensions, so `transfer_checked` would
+add cost without adding safety.
+
+## Reference SY adapters
+
+- [generic_exchange_rate_sy](reference_adapters/generic_exchange_rate_sy/src/lib.rs)
+  implements the SY interface that core's `utils/sy_cpi.rs` calls. The
+  10-discriminator map lives in the adapter's lib.rs header comment.
+  Program ID (localnet): `DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6`.
+- [kamino_sy_adapter](reference_adapters/kamino_sy_adapter/src/lib.rs)
+  wraps a Kamino Lend V2 reserve and exposes the same SY interface.
+  `init_sy_params` takes a `KycMode { None, GovernorWhitelist { .. } }`
+  argument — `None` is the retail permissionless path, `GovernorWhitelist`
+  composes with the external
+  [`clearstone-finance` governor](https://github.com/1delta-DAO/clearstone-finance)
+  to whitelist core escrows for a KYC-gated d-token. Program ID (localnet):
+  `29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd`.
+- [mock_klend](reference_adapters/mock_klend/src/lib.rs) — test-only
+  Kamino Lend V2 stand-in used by the adapter's integration tests.
+  Program ID (localnet): `AKeo9L8sGnMABrsUs7gJAk8WLye62hSJ7ikZ6yytCGkv`.
+  Never deployed to devnet/mainnet.
 
 ## Periphery programs (scaffolded, not frozen)
 
