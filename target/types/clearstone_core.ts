@@ -567,7 +567,8 @@ export type ClearstoneCore = {
           ]
         },
         {
-          "name": "mintSy"
+          "name": "mintSy",
+          "writable": true
         },
         {
           "name": "mintPt"
@@ -826,6 +827,10 @@ export type ClearstoneCore = {
               }
             }
           }
+        },
+        {
+          "name": "enableMetadata",
+          "type": "bool"
         }
       ]
     },

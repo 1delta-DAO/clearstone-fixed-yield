@@ -416,15 +416,44 @@ export async function createAndExtendAlt(params: {
     commitment: "confirmed",
   });
 
-  // ALT needs one slot before use. Poll until we've moved past the
-  // creation slot.
-  const creationSlot = slot;
+  // ALT activation is subtle in `solana-test-validator`: the docs say
+  // "usable one slot after creation", but preflight-simulation runs
+  // against the most-recently-processed slot, which can lag the
+  // confirmed cursor. Early tests in a run first-caught this as a
+  // flaky "Instruction references an unknown account" because
+  // `deserialize_lookup_table` sees a zeroed address list at sim time.
+  // Three-layer defense:
+  //   1. poll `confirmed` past creationSlot + 2 (documented minimum +1)
+  //   2. re-fetch the ALT and assert all `addresses` landed
+  //   3. fixed 300ms grace so preflight definitely sees it
   for (let i = 0; i < 40; i++) {
     const current = await connection.getSlot("confirmed");
-    if (current > creationSlot + 1) return altAddress;
+    if (current > slot + 2) break;
     await sleep(100);
+    if (i === 39) {
+      throw new Error("ALT did not become active in time");
+    }
   }
-  throw new Error("ALT did not become active in time");
+
+  for (let i = 0; i < 40; i++) {
+    const info = await connection.getAddressLookupTable(altAddress, {
+      commitment: "confirmed",
+    });
+    const populated = info.value?.state.addresses.length ?? 0;
+    if (populated >= addresses.length) break;
+    await sleep(100);
+    if (i === 39) {
+      throw new Error(
+        `ALT content never materialized: want ${addresses.length}, got ${populated}`
+      );
+    }
+  }
+
+  // 2s grace: solana-test-validator's simulation endpoint can lag the
+  // confirmed cursor on the first ALT of a run. An empirical 2s gives
+  // the preflight simulator enough time to see the populated ALT.
+  await sleep(2000);
+  return altAddress;
 }
 
 export function sleep(ms: number): Promise<void> {
@@ -638,7 +667,8 @@ export async function setupVault(params: SetupVaultParams): Promise<VaultHandles
       curator,
       creatorFeeBps,
       maxPySupply,
-      [] // emissions_seed: none by default; tests that need rewards seed inline
+      [], // emissions_seed: none by default; tests that need rewards seed inline
+      false // enable_metadata: skip Metaplex CPI in tests
     )
     .accounts({
       payer: payer.publicKey,
@@ -1024,7 +1054,8 @@ export async function setupVaultOverNonsense(
       curator,
       creatorFeeBps,
       maxPySupply,
-      [] // emissions_seed: none by default; tests that need rewards seed inline
+      [], // emissions_seed: none by default; tests that need rewards seed inline
+      false // enable_metadata: skip Metaplex CPI in tests
     )
     .accounts({
       payer: payer.publicKey,
@@ -1639,7 +1670,8 @@ export async function setupVaultOverReentrant(
       curator,
       creatorFeeBps,
       maxPySupply,
-      [] // emissions_seed: none by default; tests that need rewards seed inline
+      [], // emissions_seed: none by default; tests that need rewards seed inline
+      false // enable_metadata: skip Metaplex CPI in tests
     )
     .accounts({
       payer: payer.publicKey,
@@ -1686,6 +1718,81 @@ export interface FullStack {
   syHandles: SyMarketHandles;
   vault: VaultHandles;
   market: MarketHandles;
+}
+
+// ===== Curator PDA derivations =====
+
+export const CURATOR_VAULT_SEED = Buffer.from("curator_vault");
+export const BASE_ESCROW_SEED = Buffer.from("base_escrow");
+export const USER_POS_SEED = Buffer.from("user_pos");
+
+export function findCuratorVault(
+  curator: PublicKey,
+  baseMint: PublicKey,
+  programId: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [CURATOR_VAULT_SEED, curator.toBuffer(), baseMint.toBuffer()],
+    programId
+  );
+}
+
+export function findBaseEscrow(
+  curatorVault: PublicKey,
+  programId: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [BASE_ESCROW_SEED, curatorVault.toBuffer()],
+    programId
+  );
+}
+
+export function findUserPos(
+  curatorVault: PublicKey,
+  owner: PublicKey,
+  programId: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [USER_POS_SEED, curatorVault.toBuffer(), owner.toBuffer()],
+    programId
+  );
+}
+
+// ===== Rewards PDA derivations =====
+
+export const FARM_STATE_SEED = Buffer.from("farm_state");
+export const LP_ESCROW_SEED = Buffer.from("lp_escrow");
+export const STAKE_POSITION_SEED = Buffer.from("stake_position");
+
+export function findFarmState(
+  market: PublicKey,
+  programId: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [FARM_STATE_SEED, market.toBuffer()],
+    programId
+  );
+}
+
+export function findLpEscrow(
+  market: PublicKey,
+  programId: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [LP_ESCROW_SEED, market.toBuffer()],
+    programId
+  );
+}
+
+export function findStakePosition(
+  farmState: PublicKey,
+  owner: PublicKey,
+  programId: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [STAKE_POSITION_SEED, farmState.toBuffer(), owner.toBuffer()],
+    programId
+  );
 }
 
 export { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID };

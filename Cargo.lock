@@ -1799,6 +1799,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kamino_sy_adapter"
+version = "0.1.0"
+dependencies = [
+ "amount_value",
+ "anchor-lang",
+ "anchor-spl",
+ "getrandom 0.2.10",
+ "mock_klend",
+ "precise_number",
+ "sy_common",
+]
+
+[[package]]
 name = "keccak"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1979,6 +1992,16 @@ dependencies = [
  "libc",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "mock_klend"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "getrandom 0.2.10",
+ "precise_number",
 ]
 
 [[package]]

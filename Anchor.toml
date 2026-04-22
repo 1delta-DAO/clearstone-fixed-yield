@@ -7,6 +7,8 @@ members = [
     "reference_adapters/generic_exchange_rate_sy",
     "reference_adapters/malicious_sy_nonsense",
     "reference_adapters/malicious_sy_reentrant",
+    "reference_adapters/mock_klend",
+    "reference_adapters/kamino_sy_adapter",
     "periphery/clearstone_rewards",
     "periphery/clearstone_curator",
     "periphery/clearstone_router",
@@ -21,6 +23,8 @@ clearstone_core = "EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC"
 generic_exchange_rate_sy = "DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6"
 malicious_sy_nonsense = "jEsn9RSpNmmG8tFTo6TjYM8WxVyP9p6sBVGLbHZxZJs"
 malicious_sy_reentrant = "FNh2bhq9exxygNfJTd2ZCmUubB5Tdk51D5od2NLKCsv8"
+mock_klend = "AKeo9L8sGnMABrsUs7gJAk8WLye62hSJ7ikZ6yytCGkv"
+kamino_sy_adapter = "29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd"
 clearstone_rewards = "7ddrynBQiCNjxejxRwxvSbDb56k8F8Yp4KwYgfiaHX8g"
 clearstone_curator = "831zw8r2fGwRB1QpuRU3gZHZBFYYHBHeG7RbKUz9ssGm"
 clearstone_router = "DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW"

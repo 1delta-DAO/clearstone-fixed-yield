@@ -1,0 +1,30 @@
+[package]
+name = "kamino_sy_adapter"
+version = "0.1.0"
+description = "Clearstone SY adapter that wraps a Kamino Lend V2 reserve. Optionally CPIs into the clearstone-finance governor to whitelist clearstone_core escrow PDAs for KYC-gated d-token underlyings."
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "kamino_sy_adapter"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = [
+    "anchor-lang/idl-build",
+    "anchor-spl/idl-build",
+    "mock_klend/idl-build",
+]
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["event-cpi"] }
+anchor-spl = { version = "0.31.1" }
+precise_number = { path = "../../libraries/precise_number" }
+sy_common = { path = "../../libraries/sy_common" }
+amount_value = { path = "../../libraries/amount_value" }
+mock_klend = { path = "../mock_klend", features = ["cpi"] }
+getrandom = { version = "=0.2.10", features = ["custom"] }

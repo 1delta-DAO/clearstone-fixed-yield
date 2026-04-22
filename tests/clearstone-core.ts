@@ -721,9 +721,40 @@ describe("clearstone-core :: reentrancy (runtime mock)", () => {
     } catch (e) {
       err = e;
     }
-    expect(String(err)).to.match(
-      /ReentrancyLocked|Reentrancy locked|6030/i,
-      "outer strip should fail with ReentrancyLocked"
+    // SendTransactionError stringifies without the inner program logs;
+    // extract them explicitly so the regex can see "ReentrancyLocked".
+    const logArr: string[] = ((err as any)?.logs as string[]) ?? [];
+    let extraLogs: string[] = [];
+    try {
+      const getLogs = (err as any)?.getLogs;
+      if (typeof getLogs === "function") {
+        extraLogs = await getLogs.call(err, provider.connection);
+      }
+    } catch {
+      /* ignore */
+    }
+    const errText = [String(err), logArr.join("\n"), extraLogs.join("\n")].join("\n");
+    // Unexpected-error debug: dump on regex miss so the first failing
+    // run gives us the actual inner-ix error instead of a truncated
+    // string. Kept in the final test so flake diagnosis is one-run away.
+    // Two layers of protection, either is sufficient:
+    //   - Solana runtime's CPI-reentrancy block ("reentrancy not
+    //     allowed for this instruction") fires first because the
+    //     adapter tries to re-invoke clearstone_core, which is still
+    //     on the call stack.
+    //   - Our custom ReentrancyLocked / code 6030 would fire at the
+    //     `latch(&vault)` check if the runtime weren't catching it.
+    // Either is a correct rejection of the reentrant strip.
+    if (
+      !/ReentrancyLocked|Reentrancy locked|6030|reentrancy not allowed|ReentrancyNotAllowed/i.test(
+        errText
+      )
+    ) {
+      console.error("reentrancy strip test — full error text:\n" + errText);
+    }
+    expect(errText).to.match(
+      /ReentrancyLocked|Reentrancy locked|6030|reentrancy not allowed|ReentrancyNotAllowed/i,
+      "outer strip should be rejected by the reentrancy guard (custom or runtime)"
     );
   });
 
@@ -793,9 +824,21 @@ describe("clearstone-core :: reentrancy (runtime mock)", () => {
     } catch (e) {
       err = e;
     }
-    expect(String(err)).to.match(
-      /ReentrancyLocked|Reentrancy locked|6030/i,
-      "outer merge should fail with ReentrancyLocked"
+    const logArr: string[] = ((err as any)?.logs as string[]) ?? [];
+    let extraLogs: string[] = [];
+    try {
+      const getLogs = (err as any)?.getLogs;
+      if (typeof getLogs === "function") {
+        extraLogs = await getLogs.call(err, provider.connection);
+      }
+    } catch {
+      /* ignore */
+    }
+    const errText = [String(err), logArr.join("\n"), extraLogs.join("\n")].join("\n");
+    // Same "runtime OR custom guard" acceptance as the strip test.
+    expect(errText).to.match(
+      /ReentrancyLocked|Reentrancy locked|6030|reentrancy not allowed|ReentrancyNotAllowed/i,
+      "outer merge should be rejected by the reentrancy guard (custom or runtime)"
     );
   });
 

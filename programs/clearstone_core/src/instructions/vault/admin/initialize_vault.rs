@@ -30,6 +30,7 @@ use crate::{state::*, utils::cpi_init_sy_personal_account};
     creator_fee_bps: u16,
     max_py_supply: u64,
     emissions_seed: Vec<EmissionSeed>,
+    enable_metadata: bool,
 )]
 pub struct InitializeVault<'info> {
     #[account(mut)]
@@ -293,6 +294,7 @@ pub fn handler(
     creator_fee_bps: u16,
     max_py_supply: u64,
     emissions_seed: Vec<EmissionSeed>,
+    enable_metadata: bool,
 ) -> Result<()> {
     // PLAN §6.2 init validations — these are the immutable safety rails.
     require!(
@@ -381,8 +383,10 @@ pub fn handler(
     // Create an account for the vault robot with the SY Program
     cpi_init_sy_personal_account(ctx.accounts.sy_program.key(), ctx.remaining_accounts)?;
 
-    ctx.accounts
-        .create_metadata(pt_metadata_name, pt_metadata_symbol, pt_metadata_uri)?;
+    if enable_metadata {
+        ctx.accounts
+            .create_metadata(pt_metadata_name, pt_metadata_symbol, pt_metadata_uri)?;
+    }
 
     Ok(())
 }

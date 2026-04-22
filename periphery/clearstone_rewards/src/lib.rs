@@ -124,6 +124,10 @@ pub mod clearstone_rewards {
 
         let f = &mut ctx.accounts.farm_state;
         let pos = &mut ctx.accounts.position;
+        // Idempotent: covers the init_if_needed first-stake path where
+        // these would otherwise stay zeroed and break has_one on later ops.
+        pos.farm_state = f.key();
+        pos.owner = ctx.accounts.owner.key();
         f.total_staked = f
             .total_staked
             .checked_add(amount)

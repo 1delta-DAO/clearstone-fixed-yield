@@ -1,0 +1,23 @@
+[package]
+name = "mock_klend"
+version = "0.1.0"
+description = "Test-only mock of Kamino Lend V2 for clearstone kamino_sy_adapter integration tests."
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "mock_klend"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["event-cpi"] }
+anchor-spl = { version = "0.31.1" }
+precise_number = { path = "../../libraries/precise_number" }
+getrandom = { version = "=0.2.10", features = ["custom"] }

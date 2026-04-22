@@ -54,6 +54,7 @@ pub struct MarketTwoInit<'info> {
     )]
     pub vault: Box<Account<'info, Vault>>,
 
+    #[account(mut)]
     pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
     pub mint_pt: Box<InterfaceAccount<'info, Mint>>,
 

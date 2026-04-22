@@ -561,7 +561,8 @@
           ]
         },
         {
-          "name": "mint_sy"
+          "name": "mint_sy",
+          "writable": true
         },
         {
           "name": "mint_pt"
@@ -820,6 +821,10 @@
               }
             }
           }
+        },
+        {
+          "name": "enable_metadata",
+          "type": "bool"
         }
       ]
     },
