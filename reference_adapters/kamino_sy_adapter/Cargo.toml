@@ -18,6 +18,8 @@ idl-build = [
     "anchor-lang/idl-build",
     "anchor-spl/idl-build",
     "mock_klend/idl-build",
+    "governor/idl-build",
+    "delta-mint/idl-build",
 ]
 
 [dependencies]
@@ -27,4 +29,8 @@ precise_number = { path = "../../libraries/precise_number" }
 sy_common = { path = "../../libraries/sy_common" }
 amount_value = { path = "../../libraries/amount_value" }
 mock_klend = { path = "../mock_klend", features = ["cpi"] }
+# M-KYC-0: pinned to clearstone-finance commit a414ff6 (ParticipantRole::Escrow landed).
+# Bump to a proper tag once 1delta-DAO/clearstone-finance cuts one.
+governor   = { git = "https://github.com/1delta-DAO/clearstone-finance", rev = "a414ff6c1477d2338cd9e945aa06f8c93ca8a590", features = ["cpi"] }
+delta-mint = { git = "https://github.com/1delta-DAO/clearstone-finance", rev = "a414ff6c1477d2338cd9e945aa06f8c93ca8a590", features = ["cpi"] }
 getrandom = { version = "=0.2.10", features = ["custom"] }

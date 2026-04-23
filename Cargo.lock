@@ -1093,6 +1093,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "delta-mint"
+version = "0.1.0"
+source = "git+https://github.com/1delta-DAO/clearstone-finance?rev=a414ff6c1477d2338cd9e945aa06f8c93ca8a590#a414ff6c1477d2338cd9e945aa06f8c93ca8a590"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "spl-token-2022",
+]
+
+[[package]]
 name = "derivation-path"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1445,6 +1455,16 @@ name = "gimli"
 version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
+
+[[package]]
+name = "governor"
+version = "0.1.0"
+source = "git+https://github.com/1delta-DAO/clearstone-finance?rev=a414ff6c1477d2338cd9e945aa06f8c93ca8a590#a414ff6c1477d2338cd9e945aa06f8c93ca8a590"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "delta-mint",
+]
 
 [[package]]
 name = "h2"
@@ -1805,7 +1825,9 @@ dependencies = [
  "amount_value",
  "anchor-lang",
  "anchor-spl",
+ "delta-mint",
  "getrandom 0.2.10",
+ "governor",
  "mock_klend",
  "precise_number",
  "sy_common",

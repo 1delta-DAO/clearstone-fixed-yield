@@ -284,10 +284,10 @@ export async function initKaminoSyMarketNoKyc(params: {
 }
 
 /**
- * KYC-mode variant. Validates the `GovernorWhitelist` code path of
- * `init_sy_params` — but currently emits `WhitelistRequestedEvent` per PDA
- * instead of CPIing governor (see KYC_PASSTHROUGH_PLAN.md, M-KYC-3). Tests
- * that need the real CPI must wait until the external governor tag lands.
+ * KYC-mode variant. CPIs `governor::add_participant_via_pool(role: Escrow)`
+ * once per supplied PDA; governor in turn CPIs delta-mint to create the
+ * `WhitelistEntry` PDA. Caller must be the governor pool's root authority
+ * or admin; otherwise governor rejects with `Unauthorized`.
  */
 export async function initKaminoSyMarketGovernorWhitelist(params: {
   adapter: Program<KaminoSyAdapter>;

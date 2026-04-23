@@ -440,13 +440,16 @@ New test files:
 
 Each milestone ends with a green test suite on its own branch.
 
-### M-KYC-0 — Governor extension (0.5 day, external repo)
-- **Patch ready.** Applied + compile-verified on a local clone of
-  `1delta-DAO/clearstone-finance`; diff checked in as
-  [GOVERNOR_ESCROW_ROLE.patch](GOVERNOR_ESCROW_ROLE.patch) with companion
-  review doc [GOVERNOR_ESCROW_ROLE.md](GOVERNOR_ESCROW_ROLE.md).
-- Still pending: `git am` the patch in the external repo, add the two
-  integration tests documented in the MD, cut the tag, update Cargo.lock here.
+### M-KYC-0 — Governor extension (DONE)
+- Merged upstream on `1delta-DAO/clearstone-finance@a414ff6` (ParticipantRole::Escrow
+  landed in governor; `add_escrow_with_co_authority` / `add_escrow_to_whitelist`
+  landed in delta-mint).
+- Published program ids:
+  - `delta_mint`: `BKprvLqNUDCGrpxddppHHQ3UBhof8J5axyexDyctX1xy`
+  - `governor`:   `6xqW3D1ebp5WjbYh4vwar7ponxrpEaQiVG6uhBYVZtJi`
+- Pinned into this repo via `reference_adapters/kamino_sy_adapter/Cargo.toml`
+  (`rev = "a414ff6c1477d2338cd9e945aa06f8c93ca8a590"`). Swap to a proper tag
+  when clearstone-finance cuts one.
 
 ### M-KYC-1 — Kamino mock + adapter skeleton (1 day)
 - `reference_adapters/mock_klend/`: minimal klend program emulating the accounts and ixs we CPI
@@ -459,14 +462,17 @@ Each milestone ends with a green test suite on its own branch.
   `get_sy_state`. CPIs into `mock_klend`.
 - Unit tests: adapter in isolation produces valid `SyState`, mint/redeem math is 1:1.
 
-### M-KYC-3 — Adapter × governor wiring (1 day)
-- `init_sy_params` CPIs into governor `add_participant_via_pool` for the supplied PDA list.
-- Test: whitelist entries are created for each escrow.
-- **Swap-point ready.** The code path the CPI replaces is factored into the
-  single function
-  [`whitelist_pdas_via_governor`](reference_adapters/kamino_sy_adapter/src/lib.rs)
-  with the full replacement snippet in its docstring. M-KYC-3 is a one-
-  function swap + two Cargo dep lines once M-KYC-0's tag is published.
+### M-KYC-3 — Adapter × governor wiring (DONE)
+- `init_sy_params` CPIs into governor `add_participant_via_pool(role: Escrow)`
+  once per PDA in `core_pdas_to_whitelist`. Implementation:
+  [whitelist_pdas_via_governor](reference_adapters/kamino_sy_adapter/src/lib.rs).
+- `WhitelistRequestedEvent` stand-in struct removed from the adapter. The
+  delta-mint `WhitelistEvent` already emits for each created entry.
+- Full-integration test parked as `it.skip` pending a local-validator setup
+  that deploys governor + delta-mint (see
+  [tests/clearstone-kyc-pass-through.ts](tests/clearstone-kyc-pass-through.ts)).
+  Error-path tests (mismatched governor accounts, `WhitelistNotInKycMode`)
+  still run against fake governor pubkeys and pass without external deploy.
 
 ### M-KYC-4 — Core `transfer_checked` migration (1.5 days)
 - Replace `token_transfer` helper. Add `sy_mint` to every Accounts struct listed in §4.3.

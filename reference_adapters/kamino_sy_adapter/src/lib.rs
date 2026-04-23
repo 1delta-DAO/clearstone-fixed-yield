@@ -25,6 +25,10 @@ use anchor_spl::token_interface::{
     burn, mint_to, transfer_checked, Burn, Mint, MintTo, TokenAccount, TokenInterface,
     TransferChecked,
 };
+use governor::{
+    cpi as governor_cpi, cpi::accounts as governor_accounts,
+    ParticipantRole as GovernorRole,
+};
 use precise_number::Number;
 use sy_common::{MintSyReturnData, PositionState, RedeemSyReturnData, SyState};
 
@@ -322,60 +326,24 @@ pub mod kamino_sy_adapter {
     }
 }
 
-// -------------- Whitelist wiring (M-KYC-3 swap-point) --------------
+// -------------- Whitelist wiring (M-KYC-3) --------------
 
-/// Single-function swap-point for M-KYC-3.
+/// Whitelist the caller-supplied core PDAs via governor CPI.
 ///
-/// **Current behavior (stand-in).** Validates the remaining-accounts layout
-/// passed by the caller and emits one `WhitelistRequestedEvent` per PDA so
-/// off-chain tooling can observe the intent and, if needed, drive the real
-/// governor CPIs in a sibling transaction.
+/// For each PDA in `core_pdas_to_whitelist`, invokes
+/// `governor::add_participant_via_pool(role: Escrow)`. Governor in turn CPIs
+/// delta-mint to create the `WhitelistEntry` PDA with role = Escrow — the PDA
+/// becomes an eligible `transfer_checked` destination but is rejected from
+/// `mint_to` by delta-mint's existing Holder-only check.
 ///
-/// **M-KYC-3 swap.** Once the external clearstone-finance repo ships
-/// `ParticipantRole::Escrow` (see GOVERNOR_ESCROW_ROLE.md / .patch), replace
-/// the `emit!` loop below with a CPI:
+/// The curator (governor root authority or admin) must sign the outer tx as
+/// `accounts.curator`; governor's `is_authorized` gate runs at the CPI
+/// boundary, we don't replicate it here.
 ///
-/// ```ignore
-/// use governor::cpi as governor_cpi;
-/// use governor::cpi::accounts as governor_accounts;
-/// use governor::ParticipantRole;
-///
-/// for (i, pda) in core_pdas_to_whitelist.iter().enumerate() {
-///     let wallet_info    = &rem[i * 2];
-///     let whitelist_info = &rem[i * 2 + 1];
-///     require!(wallet_info.key() == *pda, AdapterError::WhitelistPdaMismatch);
-///
-///     governor_cpi::add_participant_via_pool(
-///         CpiContext::new(
-///             accounts.governor_program.as_ref().unwrap().to_account_info(),
-///             governor_accounts::AddParticipantViaPool {
-///                 authority: /* curator signer */,
-///                 pool_config: accounts.pool_config.as_ref().unwrap().to_account_info(),
-///                 admin_entry: None,                       // caller = root authority
-///                 dm_mint_config: accounts.dm_mint_config.as_ref().unwrap().to_account_info(),
-///                 wallet: wallet_info.clone(),
-///                 whitelist_entry: whitelist_info.clone(),
-///                 delta_mint_program: accounts.delta_mint_program.as_ref().unwrap().to_account_info(),
-///                 system_program: /* pass through */,
-///             },
-///         ),
-///         ParticipantRole::Escrow,
-///     )?;
-/// }
-/// ```
-///
-/// Cargo.toml additions for the swap:
-/// ```ignore
-/// governor   = { git = "https://github.com/1delta-DAO/clearstone-finance", tag = "vX.Y.Z-escrow-role", features = ["cpi", "no-entrypoint"] }
-/// delta_mint = { git = "https://github.com/1delta-DAO/clearstone-finance", tag = "vX.Y.Z-escrow-role", features = ["cpi", "no-entrypoint"] }
-/// ```
-///
-/// Also update [tests/clearstone-kyc-pass-through.ts]: the
-/// "GovernorWhitelist — emits WhitelistRequestedEvent" test should then
-/// assert the `WhitelistEntry` PDAs exist on delta-mint state instead of
-/// observing the event.
+/// Remaining-accounts layout, per PDA, in order:
+///   [ wallet_pubkey_to_whitelist, whitelist_entry_pda ]
 fn whitelist_pdas_via_governor<'info>(
-    sy_metadata_key: &Pubkey,
+    _sy_metadata_key: &Pubkey,
     kyc_mode: &KycMode,
     accounts: &InitSyParams<'info>,
     remaining: &[AccountInfo<'info>],
@@ -388,31 +356,42 @@ fn whitelist_pdas_via_governor<'info>(
         delta_mint_program,
     } = kyc_mode
     else {
-        // Caller already dispatched on this variant — reached only if logic upstream
-        // regresses. Fail closed.
         return err!(AdapterError::WhitelistNotInKycMode);
     };
 
-    // Address sanity check on the optional account slots.
+    let governor_prog_info = accounts
+        .governor_program
+        .as_ref()
+        .ok_or(AdapterError::GovernorAccountMismatch)?;
     require!(
-        accounts.governor_program.as_ref().map(|a| a.key()) == Some(*governor_program),
+        governor_prog_info.key() == *governor_program,
         AdapterError::GovernorAccountMismatch
     );
+    let pool_config_info = accounts
+        .pool_config
+        .as_ref()
+        .ok_or(AdapterError::GovernorAccountMismatch)?;
     require!(
-        accounts.pool_config.as_ref().map(|a| a.key()) == Some(*pool_config),
+        pool_config_info.key() == *pool_config,
         AdapterError::GovernorAccountMismatch
     );
+    let dm_mint_config_info = accounts
+        .dm_mint_config
+        .as_ref()
+        .ok_or(AdapterError::GovernorAccountMismatch)?;
     require!(
-        accounts.dm_mint_config.as_ref().map(|a| a.key()) == Some(*dm_mint_config),
+        dm_mint_config_info.key() == *dm_mint_config,
         AdapterError::GovernorAccountMismatch
     );
+    let delta_mint_prog_info = accounts
+        .delta_mint_program
+        .as_ref()
+        .ok_or(AdapterError::GovernorAccountMismatch)?;
     require!(
-        accounts.delta_mint_program.as_ref().map(|a| a.key()) == Some(*delta_mint_program),
+        delta_mint_prog_info.key() == *delta_mint_program,
         AdapterError::GovernorAccountMismatch
     );
 
-    // remaining_accounts layout, per PDA:
-    //   [ wallet_pubkey_to_whitelist, whitelist_entry_pda ]
     require!(
         remaining.len() == core_pdas_to_whitelist.len() * 2,
         AdapterError::WhitelistAccountsMismatch
@@ -420,17 +399,28 @@ fn whitelist_pdas_via_governor<'info>(
 
     for (i, pda) in core_pdas_to_whitelist.iter().enumerate() {
         let wallet_info = &remaining[i * 2];
-        require!(wallet_info.key() == *pda, AdapterError::WhitelistPdaMismatch);
+        let whitelist_entry_info = &remaining[i * 2 + 1];
+        require!(
+            wallet_info.key() == *pda,
+            AdapterError::WhitelistPdaMismatch
+        );
 
-        // === M-KYC-3 SWAP POINT ===
-        // Replace this event-emit with a governor::cpi::add_participant_via_pool
-        // call (see function docstring above for the full snippet).
-        emit!(WhitelistRequestedEvent {
-            sy_metadata: *sy_metadata_key,
-            pool_config: *pool_config,
-            pda_to_whitelist: *pda,
-            whitelist_entry: remaining[i * 2 + 1].key(),
-        });
+        governor_cpi::add_participant_via_pool(
+            CpiContext::new(
+                governor_prog_info.to_account_info(),
+                governor_accounts::AddParticipantViaPool {
+                    authority: accounts.curator.to_account_info(),
+                    pool_config: pool_config_info.to_account_info(),
+                    admin_entry: None,
+                    dm_mint_config: dm_mint_config_info.to_account_info(),
+                    wallet: wallet_info.clone(),
+                    whitelist_entry: whitelist_entry_info.clone(),
+                    delta_mint_program: delta_mint_prog_info.to_account_info(),
+                    system_program: accounts.system_program.to_account_info(),
+                },
+            ),
+            GovernorRole::Escrow,
+        )?;
     }
 
     Ok(())
@@ -497,16 +487,6 @@ pub struct PersonalPosition {
 
 impl PersonalPosition {
     pub const SIZE: usize = 8 + 32 + 32 + 8;
-}
-
-// -------------- Events --------------
-
-#[event]
-pub struct WhitelistRequestedEvent {
-    pub sy_metadata: Pubkey,
-    pub pool_config: Pubkey,
-    pub pda_to_whitelist: Pubkey,
-    pub whitelist_entry: Pubkey,
 }
 
 // -------------- Contexts --------------

@@ -5,19 +5,13 @@
 > This is the blocker PR for the clearstone-fixed-yield KYC pass-through work
 > (see [KYC_PASSTHROUGH_PLAN.md](KYC_PASSTHROUGH_PLAN.md) §3.4 / §4.4).
 
-> **Ready-made patch.** The diff is already implemented and compile-verified
-> against `main` — apply [GOVERNOR_ESCROW_ROLE.patch](GOVERNOR_ESCROW_ROLE.patch)
-> directly:
->
-> ```bash
-> cd /path/to/clearstone-finance
-> git checkout -b add-escrow-role
-> git am /path/to/clearstone-fixed-yield/GOVERNOR_ESCROW_ROLE.patch
-> # -> run the tests in §1.4 and §2.4 of this doc, then open the PR.
-> ```
->
-> The sections below document what the patch does and why, for code review.
-> The *actual* step-by-step is: apply the patch, add the tests, tag, done.
+> **STATUS — MERGED.** Landed upstream on `1delta-DAO/clearstone-finance@a414ff6`.
+> Program ids published: `delta_mint = BKprvLqNUDCGrpxddppHHQ3UBhof8J5axyexDyctX1xy`,
+> `governor = 6xqW3D1ebp5WjbYh4vwar7ponxrpEaQiVG6uhBYVZtJi`. Both crates are now
+> Cargo-pinned as git deps in `reference_adapters/kamino_sy_adapter/Cargo.toml`
+> and the real CPI is wired in
+> [whitelist_pdas_via_governor](reference_adapters/kamino_sy_adapter/src/lib.rs).
+> This doc is kept for audit trail + future re-application if ever needed.
 
 ## Summary of the landed patch
 
