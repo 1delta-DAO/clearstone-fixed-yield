@@ -18,19 +18,27 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program, AnchorProvider, BN } from "@coral-xyz/anchor";
 import {
+  AccountMeta,
+  Ed25519Program,
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
+  Transaction,
 } from "@solana/web3.js";
 import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
+  createApproveInstruction,
   getAccount,
+  getAssociatedTokenAddressSync,
   getOrCreateAssociatedTokenAccount,
 } from "@solana/spl-token";
 import { assert, expect } from "chai";
 
 import type { ClearstoneCore } from "../target/types/clearstone_core";
+import type { ClearstoneFusion } from "../target/types/clearstone_fusion";
 import type { GenericExchangeRateSy } from "../target/types/generic_exchange_rate_sy";
 import type { MockFlashCallback } from "../target/types/mock_flash_callback";
 import {
@@ -47,6 +55,12 @@ import {
   setupVault,
   stripWithGenericAdapter,
 } from "./fixtures";
+import {
+  buildSimpleOrder,
+  findFusionDelegatePda,
+  findFusionOrderStatePda,
+  signFusionOrder,
+} from "./fusion_sign";
 
 anchor.setProvider(AnchorProvider.env());
 const provider = anchor.getProvider() as AnchorProvider;
@@ -394,16 +408,210 @@ describe("clearstone_core :: flash_swap_pt", () => {
 
   // -------------------------------------------------------------------------
   // End-to-end happy path via the real callback + fusion stack.
-  // Deferred — needs:
-  //   • clearstone_solver_callback deployed on the test validator
-  //   • clearstone-fusion deployed + a signed OrderConfig (maker-side tooling)
-  //   • delta-mint (optional — only if the order's src is a KYC d-token)
-  // Same e2e gating as the GovernorWhitelist test in clearstone-kyc-pass-through.ts.
+  //
+  // Requires (cloned into the test validator via Anchor.toml [[test.validator.clone]]):
+  //   • clearstone-fusion (9ShSnLUcWeg5BZzokj8mdo9cNHARCKa42kwmqSdBNM6J)
+  //   • clearstone_solver_callback (27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP)
+  //
+  // Flow:
+  //   1. Stand up SPL vault + market via freshFlashStack (non-KYC path — src==SY).
+  //   2. Maker keypair with SY; SPL `approve` to fusion delegate PDA.
+  //   3. Build + Ed25519-sign an OrderConfig (src=SY, dst=PT, permissionless resolver_policy).
+  //   4. Solver tx = [Ed25519.verify, core.flash_swap_pt] with:
+  //        callback_program = clearstone_solver_callback
+  //        callback_data    = borsh(orderBytes ++ fusionFillAmount)
+  //        remaining_accounts = SY-CPI extras ++ fusion Fill passthrough (17 slots)
+  //   5. Assert: maker_dst_ata holds PT, solver.pt_ata ends at 0, flash_pt_debt clear.
   // -------------------------------------------------------------------------
-  it.skip("e2e happy path — fusion.fill via clearstone_solver_callback", async () => {
-    // TODO: once the callback + fusion programs are in [[test.validator.clone]],
-    // sign an OrderConfig with a maker keypair, build callback_data via the
-    // solver's encodeCallbackPayload, and assert maker received PT + market
-    // state matches equivalent trade_pt.
+  it("e2e happy path — fusion.fill via clearstone_solver_callback", async () => {
+    const stack = await freshFlashStack();
+
+    // clearstone_fusion is not in [programs.localnet] — it's clone-only.
+    // Load its IDL from the vendored copy at target/idl/.
+    /* eslint-disable @typescript-eslint/no-var-requires */
+    const fusionIdl = require("../target/idl/clearstone_fusion.json");
+    /* eslint-enable @typescript-eslint/no-var-requires */
+    const fusion = new anchor.Program(
+      fusionIdl as anchor.Idl,
+      provider
+    ) as unknown as Program<ClearstoneFusion>;
+
+    // -- Solver-callback program id (cloned from devnet). --
+    const callbackProgramId = new PublicKey(
+      "27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP"
+    );
+
+    // -- Maker keypair, funded, holding SY. --
+    const maker = await fundedUser();
+    const makerSyAta = await mintSyForUser({
+      program: syProgram,
+      connection: provider.connection,
+      user: maker,
+      handles: stack.sy,
+      amountBase: new BN(20_000_000),
+    });
+
+    // Maker approves fusion's delegate PDA as a spending delegate on their SY ATA.
+    // Cap equals `src_amount` — just enough for this fill.
+    const SRC_AMOUNT = 1_000_000;
+    const [delegateAuthority] = findFusionDelegatePda(fusion.programId);
+    const approveIx = createApproveInstruction(
+      makerSyAta,
+      delegateAuthority,
+      maker.publicKey,
+      BigInt(SRC_AMOUNT),
+      [],
+      TOKEN_PROGRAM_ID
+    );
+    await provider.sendAndConfirm(new Transaction().add(approveIx), [maker]);
+
+    // Maker's PT ATA (where fusion delivers dst). Pre-create so the fusion.fill
+    // init_if_needed path doesn't need additional lamports at fill time.
+    const makerPtAta = (
+      await getOrCreateAssociatedTokenAccount(
+        provider.connection,
+        payer, // fee payer
+        stack.vault.mintPt,
+        maker.publicKey
+      )
+    ).address;
+
+    // -- Build + sign the OrderConfig. --
+    const expirationTime = Math.floor(Date.now() / 1000) + 3600;
+    const MIN_DST = 100_000;
+    const orderConfig = buildSimpleOrder({
+      id: 1,
+      srcAmount: new BN(SRC_AMOUNT),
+      minDstAmount: new BN(MIN_DST),
+      expirationTime,
+    });
+    const bundle = signFusionOrder({
+      fusion,
+      maker,
+      makerReceiver: maker.publicKey,
+      srcMint: stack.sy.syMint,
+      dstMint: stack.vault.mintPt,
+      order: orderConfig,
+    });
+
+    // -- Build the solver tx. --
+    const marketAcct = (await (core.account as any).marketTwo.fetch(
+      stack.market.market
+    )) as any;
+    const altResp = await provider.connection.getAddressLookupTable(
+      stack.market.alt
+    );
+    const alt = altResp.value!;
+
+    // SY-CPI passthrough (core's get_sy_state/deposit_sy/withdraw_sy union).
+    const syExtras: AccountMeta[] = (() => {
+      const seen = new Map<number, AccountMeta>();
+      for (const list of [
+        marketAcct.cpiAccounts.getSyState,
+        marketAcct.cpiAccounts.depositSy,
+        marketAcct.cpiAccounts.withdrawSy,
+      ]) {
+        for (const ctx of list as any[]) {
+          const idx: number = ctx.altIndex;
+          const pubkey = alt.state.addresses[idx];
+          const prev = seen.get(idx);
+          seen.set(idx, {
+            pubkey,
+            isSigner: ctx.isSigner || (prev?.isSigner ?? false),
+            isWritable: ctx.isWritable || (prev?.isWritable ?? false),
+          });
+        }
+      }
+      return [...seen.values()];
+    })();
+
+    // Fusion Fill passthrough (17 slots; matches OnFlashPtReceived after its
+    // 6-account fixed prefix from core).
+    const makerSrcAta = getAssociatedTokenAddressSync(
+      stack.sy.syMint,
+      maker.publicKey
+    );
+    const solverSrcAta = stack.solverSyAta;
+    const [orderState] = findFusionOrderStatePda(
+      fusion.programId,
+      maker.publicKey,
+      bundle.orderHash
+    );
+    const fusionPassthrough: AccountMeta[] = [
+      { pubkey: fusion.programId, isSigner: false, isWritable: false },
+      { pubkey: maker.publicKey, isSigner: false, isWritable: true },
+      { pubkey: maker.publicKey, isSigner: false, isWritable: true }, // maker_receiver
+      { pubkey: makerSrcAta, isSigner: false, isWritable: true },
+      { pubkey: solverSrcAta, isSigner: false, isWritable: true },
+      { pubkey: makerPtAta, isSigner: false, isWritable: true },
+      { pubkey: stack.sy.syMint, isSigner: false, isWritable: false },
+      { pubkey: stack.vault.mintPt, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: findFusionDelegatePda(fusion.programId)[0], isSigner: false, isWritable: false },
+      { pubkey: orderState, isSigner: false, isWritable: true },
+      // No fees. None sentinel for optional Option<Account> slots = program id.
+      { pubkey: fusion.programId, isSigner: false, isWritable: false },
+      { pubkey: fusion.programId, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+    ];
+
+    // callback_data = orderBytes ++ u64(fusion_fill_amount).
+    const fillAmountBytes = Buffer.alloc(8);
+    fillAmountBytes.writeBigUInt64LE(BigInt(SRC_AMOUNT));
+    const callbackData = Buffer.concat([bundle.orderBytes, fillAmountBytes]);
+
+    // tx: [Ed25519.verify, core.flash_swap_pt]
+    const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+      publicKey: Buffer.from(maker.publicKey.toBytes()),
+      message: Buffer.from(bundle.orderHash, "hex"),
+      signature: Buffer.from(bundle.signature, "hex"),
+    });
+    const flashIx = await core.methods
+      .flashSwapPt(new BN(MIN_DST), callbackData)
+      .accounts({
+        caller: stack.solver.publicKey,
+        market: stack.market.market,
+        callerPtDst: stack.solverPtAta,
+        tokenSyEscrow: stack.market.escrowSy,
+        tokenPtEscrow: stack.market.escrowPt,
+        tokenFeeTreasurySy: stack.market.tokenTreasuryFeeSy,
+        mintSy: stack.sy.syMint,
+        callbackProgram: callbackProgramId,
+        addressLookupTable: stack.market.alt,
+        syProgram: syProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      } as any)
+      .remainingAccounts([...syExtras, ...fusionPassthrough])
+      .preInstructions([CU_LIMIT_IX])
+      .instruction();
+
+    const tx = new Transaction().add(ed25519Ix, flashIx);
+    await provider.sendAndConfirm(tx, [stack.solver], { commitment: "confirmed" });
+
+    // -- Assertions --
+    const makerPt = await getAccount(provider.connection, makerPtAta);
+    assert.ok(
+      makerPt.amount >= BigInt(MIN_DST),
+      `maker received ≥ min_dst_amount PT (got ${makerPt.amount})`
+    );
+
+    const solverPt = await getAccount(provider.connection, stack.solverPtAta);
+    assert.equal(
+      solverPt.amount.toString(),
+      "0",
+      "solver's PT ATA is drained by fusion.fill delivery (zero inventory)"
+    );
+
+    const marketAfter = (await (core.account as any).marketTwo.fetch(
+      stack.market.market
+    )) as any;
+    assert.equal(
+      BigInt(marketAfter.flashPtDebt.toString()),
+      0n,
+      "flash_pt_debt cleared at tx end"
+    );
   });
 });

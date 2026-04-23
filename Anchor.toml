@@ -65,5 +65,14 @@ address = "6xqW3D1ebp5WjbYh4vwar7ponxrpEaQiVG6uhBYVZtJi" # governor
 [[test.validator.clone]]
 address = "gatem74V238djXdzWnJf94Wo1DcnuGkfijbf3AuBhfs"
 
+# Clone clearstone-fusion + the reference flash-fill callback so the fusion
+# flash e2e test in tests/clearstone-fusion-flash.ts can settle a signed
+# OrderConfig through core.flash_swap_pt → callback → fusion.fill.
+[[test.validator.clone]]
+address = "9ShSnLUcWeg5BZzokj8mdo9cNHARCKa42kwmqSdBNM6J" # clearstone_fusion
+
+[[test.validator.clone]]
+address = "27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP" # clearstone_solver_callback
+
 [test.validator]
 url = "https://api.devnet.solana.com"
