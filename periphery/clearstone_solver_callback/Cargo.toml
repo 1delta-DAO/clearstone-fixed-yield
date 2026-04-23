@@ -1,0 +1,30 @@
+[package]
+name = "clearstone_solver_callback"
+version = "0.1.0"
+description = "Reference callback program for clearstone_core.flash_swap_pt. Settles a clearstone-fusion order atomically against the flash-borrowed PT."
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "clearstone_solver_callback"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = [
+    "anchor-lang/idl-build",
+    "anchor-spl/idl-build",
+    "clearstone-fusion/idl-build",
+]
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["event-cpi"] }
+anchor-spl = { version = "0.31.1" }
+# Fusion pinned to the current main tip. Bump to a proper tag once the remote
+# cuts one; the Cargo package name is "clearstone-fusion" and the Rust crate
+# identifier is `clearstone_fusion` (anchor's name in `#[program]`).
+clearstone-fusion = { git = "https://github.com/1delta-DAO/clearstone-fusion-protocol", features = ["cpi"] }
+getrandom = { version = "=0.2.10", features = ["custom"] }

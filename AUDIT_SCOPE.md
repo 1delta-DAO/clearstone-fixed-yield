@@ -37,6 +37,13 @@ Versions / commits at audit kickoff go here when the tag is cut.
   is hardcoded to `mock_klend`'s Reserve layout. Swapping to real klend
   is a one-function change — flag for any caller planning a production
   deploy against live klend.
+- **[periphery/clearstone_solver_callback/](periphery/clearstone_solver_callback/)** —
+  Reference callback for `core.flash_swap_pt`. Composes the flash
+  primitive with `clearstone-fusion` (external). Scope-scoped to the
+  `src_mint == market.mint_sy` case — any extension to handle
+  `src_mint == underlying-asset` (wrap + mint_sy chain) is a separate
+  audit. Main concern: the discriminator-matched callback ABI must stay
+  in lockstep with core's `CALLBACK_IX_NAME`.
 - **[libraries/](libraries/)** — inherited from upstream Exponent. The
   math-critical ones (`precise_number`, `time_curve`) sit under every
   reserve calculation. Upstream audits exist (Ottersec, Offside, Certora
@@ -48,6 +55,13 @@ Versions / commits at audit kickoff go here when the tag is cut.
 - **[reference_adapters/mock_klend/](reference_adapters/mock_klend/)** —
   test-only Kamino Lend V2 stand-in. Never deployed to devnet/mainnet.
   Skip.
+- **[reference_adapters/mock_flash_callback/](reference_adapters/mock_flash_callback/)** —
+  test-only configurable callback for `flash_swap_pt` integration tests.
+  Never deployed to devnet/mainnet. Skip.
+- **External [clearstone-fusion](https://github.com/1delta-DAO/clearstone-fusion-protocol)** —
+  intent-settlement layer. clearstone-finance ships it separately; it's
+  audited on that repo. `clearstone_solver_callback` treats it as a
+  trusted CPI target gated by the maker's signed `resolver_policy`.
 - **External governor composability** — the KYC pass-through flow
   composes with the external
   [`clearstone-finance` governor + delta-mint](https://github.com/1delta-DAO/clearstone-finance)
@@ -120,6 +134,40 @@ it's a pass-through. KYC is enforced at the delta-mint mint layer and
 becomes a curator-selected property of whichever SY adapter the vault is
 wired to. If the audit covers institutional deployments, also review the
 external governor + delta-mint repos separately.
+
+### Flash swap (I-F1 through I-F4)
+
+- `market.flash_pt_debt` is zero at rest and only written by `flash_swap_pt`
+  (steps 4 and 8). Every other market-mutating handler gates on this field.
+- The flash handler reads `sy_exchange_rate` exactly once and uses that
+  same snapshot for both the quote and the final `apply_trade_pt` call —
+  no second SY CPI after the callback returns.
+- `MarketTwo.pt_balance` is decremented only at commit-time (step 7);
+  between steps 4 and 6 the escrow temporarily holds less than
+  `pt_balance`, reconciled on success or reverted on failure.
+- Repayment is measured as an escrow-balance delta, not a tracked-balance
+  check. Callback programs are free to source SY from anywhere — the
+  only requirement is that `token_sy_escrow.amount` grows by at least
+  the quoted amount before the handler returns.
+
+**Auditor guidance.** The flash primitive is intentionally a temporary
+I-M1 violation. The guards in I-F1..I-F4 narrow the violation window to a
+single handler's lifetime and close it before return. Three cross-cutting
+concerns worth separate attention:
+1. **Callback-program trust model.** `callback_program` is caller-picked
+   and core does zero validation on it. Safe by default — a malicious
+   callback that fails to repay reverts the whole tx — but the caller
+   (solver) must not sign a tx whose callback they haven't vetted.
+2. **Cross-market flash.** Each market has its own `flash_pt_debt`, so
+   a callback CAN legitimately CPI `flash_swap_pt` on a different market
+   during a flash on market A. Cross-market isolation (I-M4) is what
+   makes this safe — but audit the interaction with vault-level state
+   (is any vault-linked state reachable from two markets' flash paths?).
+3. **Callback discriminator.** Core CPIs the callback via the Anchor
+   discriminator `sha256("global:on_flash_pt_received")[..8]`. If the
+   callback defines a different ix name with a colliding 8-byte prefix,
+   it'd match — astronomically unlikely but worth noting as a cryptographic
+   assumption.
 
 ## Known open items
 

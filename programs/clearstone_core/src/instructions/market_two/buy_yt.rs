@@ -174,6 +174,12 @@ impl<'i> BuyYt<'i> {
     }
 
     pub fn validate(&self) -> Result<()> {
+        // I-F1: no market-mutating entrypoint may fire while a flash is open.
+        require!(
+            self.market.flash_pt_debt == 0,
+            ExponentCoreError::NestedFlashBlocked
+        );
+
         require!(
             self.market.check_status_flags(STATUS_CAN_BUY_YT),
             ExponentCoreError::BuyingYtDisabled

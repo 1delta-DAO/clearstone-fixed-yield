@@ -11,8 +11,17 @@
 //
 // All three must succeed or the tx reverts — no partial fills.
 
-import { Ed25519Program, PublicKey, Transaction } from "@solana/web3.js";
+import * as anchor from "@coral-xyz/anchor";
 import {
+  AccountMeta,
+  Ed25519Program,
+  PublicKey,
+  SystemProgram,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
+  Transaction,
+} from "@solana/web3.js";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   getAssociatedTokenAddressSync,
@@ -21,7 +30,11 @@ import {
 import type { SolverClients } from "./clients.js";
 import type { SignedFusionOrder } from "./index.js";
 import type { FillPlan } from "./route.js";
-import { buildFusionFillIx } from "./fusion.js";
+import {
+  buildFusionFillIx,
+  findDelegateAuthorityPda,
+  findOrderStatePda,
+} from "./fusion.js";
 import {
   fetchAlt,
   fetchMarketState,
@@ -91,7 +104,30 @@ export async function buildAndSendFill(
     })
   );
 
-  // (2) Core routing — produce dst in the solver's ATA.
+  // Flash path: core.flash_swap_pt handles PT delivery + calls the callback
+  // program, which does fusion.fill internally. No standalone fusion.fill ix
+  // at the outer tx level.
+  if (plan.kind === "flashFusion") {
+    tx.add(
+      await buildFlashFillIx(clients, order, plan, {
+        maker,
+        makerReceiver,
+        makerSrcAta,
+        takerSrcAta,
+        takerDstAta,
+        makerDstAta,
+        srcMint,
+        dstMint,
+        srcTokenProgram,
+        dstTokenProgram,
+      })
+    );
+    return clients.provider.sendAndConfirm(tx, [clients.solver], {
+      commitment: "confirmed",
+    });
+  }
+
+  // Inventory path (tradePt / strip): core routing first → fusion.fill last.
   switch (plan.kind) {
     case "tradePt":
       tx.add(await buildTradePtIx(clients, plan));
@@ -101,7 +137,7 @@ export async function buildAndSendFill(
       break;
   }
 
-  // (3) fusion.fill — pulls src from maker, delivers dst to maker.
+  // fusion.fill — pulls src from maker, delivers dst to maker.
   const fillIx = await buildFusionFillIx({
     fusion: clients.fusion,
     order: orderConfig,
@@ -117,15 +153,151 @@ export async function buildAndSendFill(
     taker: clients.solver.publicKey,
     srcTokenProgram,
     dstTokenProgram,
-    amount: plan.srcAmount,
+    amount: planSrcAmount(plan),
     merkleProof: null,
   });
   tx.add(fillIx);
 
-  // (4) Send.
   return clients.provider.sendAndConfirm(tx, [clients.solver], {
     commitment: "confirmed",
   });
+}
+
+/**
+ * Flash-fill ix builder.
+ *
+ * Outer tx shape (caller-built in buildAndSendFill):
+ *   [Ed25519.verify, core.flash_swap_pt(pt_amount, callback_data)]
+ *
+ * `callback_data` = borsh-encoded {fusion_order, fusion_fill_amount} matching
+ * `clearstone_solver_callback::CallbackPayload`. The payload's OrderConfig is
+ * forwarded verbatim by the callback to fusion.fill.
+ *
+ * `remainingAccounts` on flash_swap_pt is the 16-account fusion Fill
+ * passthrough that core forwards to the callback. Exact order matches
+ * `OnFlashPtReceived` in periphery/clearstone_solver_callback/src/lib.rs.
+ */
+async function buildFlashFillIx(
+  clients: SolverClients,
+  order: SignedFusionOrder,
+  plan: Extract<FillPlan, { kind: "flashFusion" }>,
+  resolved: {
+    maker: PublicKey;
+    makerReceiver: PublicKey;
+    makerSrcAta: PublicKey;
+    takerSrcAta: PublicKey;
+    takerDstAta: PublicKey;
+    makerDstAta: PublicKey;
+    srcMint: PublicKey;
+    dstMint: PublicKey;
+    srcTokenProgram: PublicKey;
+    dstTokenProgram: PublicKey;
+  }
+) {
+  const market = await fetchMarketState(clients, plan.market);
+  const alt = await fetchAlt(clients, market.addressLookupTable);
+  const syCpiExtras = resolveSyCpiRemainingAccounts(
+    [
+      market.cpiAccounts.getSyState,
+      market.cpiAccounts.depositSy,
+      market.cpiAccounts.withdrawSy,
+    ],
+    alt
+  );
+
+  // Solver's PT ATA — receives the flash-borrow from core. Anchor core owns
+  // the authority check (must be caller). dstMint == market.mint_pt.
+  const callerPtDst = getAssociatedTokenAddressSync(
+    market.mintPt,
+    clients.solver.publicKey,
+    false,
+    TOKEN_PROGRAM_ID
+  );
+
+  // Serialize CallbackPayload. Uses the vendored fusion IDL's OrderConfig
+  // encoder for byte-identical layout with the Rust side.
+  const payload = encodeCallbackPayload(
+    clients,
+    (order.config as any),
+    plan.fusionFillAmount
+  );
+
+  // Fusion passthrough — exactly the account order expected by
+  // `OnFlashPtReceived` (after the 6-account fixed prefix core injects).
+  const [delegateAuthority] = findDelegateAuthorityPda(clients.fusionProgramId);
+  const [orderState] = findOrderStatePda(
+    resolved.maker,
+    Buffer.from(order.orderHash, "hex"),
+    clients.fusionProgramId
+  );
+
+  const fusionPassthrough: AccountMeta[] = [
+    { pubkey: clients.fusionProgramId, isSigner: false, isWritable: false },
+    { pubkey: resolved.maker, isSigner: false, isWritable: true },
+    { pubkey: resolved.makerReceiver, isSigner: false, isWritable: true },
+    { pubkey: resolved.makerSrcAta, isSigner: false, isWritable: true },
+    { pubkey: resolved.takerSrcAta, isSigner: false, isWritable: true },
+    { pubkey: resolved.makerDstAta, isSigner: false, isWritable: true },
+    { pubkey: resolved.srcMint, isSigner: false, isWritable: false },
+    { pubkey: resolved.dstMint, isSigner: false, isWritable: false },
+    { pubkey: resolved.srcTokenProgram, isSigner: false, isWritable: false },
+    { pubkey: resolved.dstTokenProgram, isSigner: false, isWritable: false },
+    { pubkey: delegateAuthority, isSigner: false, isWritable: false },
+    { pubkey: orderState, isSigner: false, isWritable: true },
+    // Optional fee slots — None on the Rust side surfaces as Pubkey::default().
+    // Fusion's Fill struct handles Option<UncheckedAccount>; we pass default
+    // here and the callback's Anchor deserializer skips optional Nones.
+    // TODO(solver): when the order carries real protocol/integrator fee
+    // destinations, populate these from orderConfig.fee.*_dst_acc.
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+  ];
+
+  return clients.clearstoneCore.methods
+    .flashSwapPt(plan.ptAmount, payload)
+    .accounts({
+      caller: clients.solver.publicKey,
+      market: market.publicKey,
+      callerPtDst,
+      tokenSyEscrow: market.tokenSyEscrow,
+      tokenPtEscrow: market.tokenPtEscrow,
+      tokenFeeTreasurySy: market.tokenFeeTreasurySy,
+      mintSy: market.mintSy,
+      callbackProgram: clients.callbackProgramId,
+      addressLookupTable: market.addressLookupTable,
+      syProgram: market.syProgram,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    } as any)
+    .remainingAccounts([...syCpiExtras, ...fusionPassthrough])
+    .instruction();
+}
+
+/**
+ * Encode `CallbackPayload` from TS using the fusion IDL's OrderConfig type.
+ *
+ * Uses `fusion.coder.types.encode` for OrderConfig (anchor-maintained borsh
+ * parity with Rust), then manually appends the u64 fill amount since the
+ * payload itself is a small bespoke struct, not an IDL-defined one.
+ */
+function encodeCallbackPayload(
+  clients: SolverClients,
+  fusionOrder: unknown,
+  fusionFillAmount: anchor.BN
+): Buffer {
+  const orderBytes = (clients.fusion.coder.types as any).encode(
+    "orderConfig",
+    fusionOrder
+  ) as Buffer;
+  const amountBytes = Buffer.alloc(8);
+  amountBytes.writeBigUInt64LE(BigInt(fusionFillAmount.toString()));
+  return Buffer.concat([orderBytes, amountBytes]);
+}
+
+/** Helper: pull the src amount off any plan variant (only inventory plans hit this). */
+function planSrcAmount(plan: FillPlan): anchor.BN {
+  if (plan.kind === "flashFusion") return plan.fusionFillAmount;
+  return plan.srcAmount;
 }
 
 async function buildTradePtIx(

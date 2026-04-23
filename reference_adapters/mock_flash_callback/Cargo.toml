@@ -1,0 +1,23 @@
+[package]
+name = "mock_flash_callback"
+version = "0.1.0"
+description = "Test-only callback program for core.flash_swap_pt. Configurable per-invocation behavior to exercise happy/short-repay/nested-flash/no-op paths without needing fusion deployed."
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "mock_flash_callback"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build", "clearstone_core/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["event-cpi"] }
+anchor-spl = { version = "0.31.1" }
+clearstone_core = { path = "../../programs/clearstone_core", features = ["cpi"] }
+getrandom = { version = "=0.2.10", features = ["custom"] }

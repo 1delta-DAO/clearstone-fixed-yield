@@ -15,6 +15,8 @@ enforcement and property).
 - **I-E\*** — Economic invariants (fees, curation).
 - **I-KYC\*** — KYC pass-through discipline (Token-2022 + optional
   governor composability).
+- **I-F\*** — Flash-swap discipline (Pendle-style PT flash borrow with
+  callback; see INTENT_FLASH_PLAN.md).
 
 ---
 
@@ -510,6 +512,133 @@ sketch.
 
 ---
 
+## Flash-swap invariants
+
+### I-F1 — Flash atomicity
+
+**Statement.** `market.flash_pt_debt != 0` only between the start and end of
+a single `flash_swap_pt` handler invocation. All other market-mutating
+entrypoints reject any call where `flash_pt_debt != 0`.
+
+**Why.** A flash window is a deliberate temporary violation of I-M1 (reserve
+accounting): PT is out in the wild but `pt_balance` hasn't been decremented
+yet. Letting any other handler run during that window would either read a
+stale state or compound the violation.
+
+**Where enforced.**
+[flash_swap_pt.rs](programs/clearstone_core/src/instructions/market_two/flash_swap_pt.rs)
+sets `market.flash_pt_debt = pt_out` at step 4 and clears it at step 8.
+Every market-mutating handler's `validate` asserts `flash_pt_debt == 0`:
+
+- [trade_pt.rs](programs/clearstone_core/src/instructions/market_two/trade_pt.rs)
+- [buy_yt.rs](programs/clearstone_core/src/instructions/market_two/buy_yt.rs)
+- [sell_yt.rs](programs/clearstone_core/src/instructions/market_two/sell_yt.rs)
+- [deposit_liquidity.rs](programs/clearstone_core/src/instructions/market_two/deposit_liquidity.rs)
+- [withdraw_liquidity.rs](programs/clearstone_core/src/instructions/market_two/withdraw_liquidity.rs)
+- [flash_swap_pt.rs](programs/clearstone_core/src/instructions/market_two/flash_swap_pt.rs) itself (blocks self-nesting)
+
+**Tests.**
+[tests/clearstone-fusion-flash.ts](tests/clearstone-fusion-flash.ts) —
+"nested flash (mode=TryNestedFlash) reverts" test: a callback that CPIs
+back into `flash_swap_pt` on the same market must revert.
+
+**Residual risk.** A failed (reverting) flash tx reverts all account mutations,
+so `flash_pt_debt` can't leak a non-zero value across tx boundaries. The
+only way to corrupt the field is through a direct write outside the two
+approved sites — audit checklist item below.
+
+---
+
+### I-F2 — Flash repayment
+
+**Statement.** At the end of a `flash_swap_pt` handler, the delta in
+`token_sy_escrow.amount` from the start of the handler is ≥ the
+`sy_required` quote computed at handler start. If the delta is short, the
+tx reverts with `FlashRepayInsufficient`.
+
+**Why.** The whole point of the flash: PT sent out must be paid for in SY
+before the ix closes, at the market-quoted rate. Short-repay means free
+liquidity out of the pool.
+
+**Where enforced.**
+[flash_swap_pt.rs](programs/clearstone_core/src/instructions/market_two/flash_swap_pt.rs)
+step 6 — `token_sy_escrow.reload()` after the callback, compute delta, assert.
+
+**Tests.**
+[tests/clearstone-fusion-flash.ts](tests/clearstone-fusion-flash.ts) —
+"short-repay" and "no-op callback" tests. Both trip `FlashRepayInsufficient`.
+
+**Residual risk.** The escrow delta measurement is a direct token-account
+read, not a tracked-balance check. A callback that can mint the exact SY
+amount from elsewhere passes the gate — which is intended (that's how
+fusion.fill pulls from the maker). Only "free" PT is blocked.
+
+---
+
+### I-F3 — Rate freshness
+
+**Statement.** `sy_exchange_rate` is read exactly once per flash (at step 2
+of the handler) and used for BOTH the repayment quote (step 3) and the
+final commit via `MarketFinancials::apply_trade_pt` (step 7). It is not
+re-sampled from the SY program after the callback returns.
+
+**Why.** The callback runs untrusted code. If it can move the SY program's
+reported rate between the quote and the commit, the commit reads a stale
+rate and the AMM math can desync from economic reality.
+
+**Where enforced.**
+[flash_swap_pt.rs](programs/clearstone_core/src/instructions/market_two/flash_swap_pt.rs) —
+the local `sy_exchange_rate` binding is the only rate value used from step 2
+onward. No `do_get_sy_state` call after the callback.
+[MarketFinancials::apply_trade_pt](programs/clearstone_core/src/state/market_two.rs)
+was extracted specifically so the commit can run against a caller-supplied
+rate snapshot rather than re-reading.
+
+**Tests.**
+`quote_then_apply_matches_trade_pt` in
+[state/market_two.rs virtualization_tests](programs/clearstone_core/src/state/market_two.rs)
+— proves quote+apply produces the same state as the fused `trade_pt` would.
+Locks the refactor against drift.
+
+**Residual risk.** If a future change adds a second `do_get_sy_state` call
+inside `flash_swap_pt` the invariant breaks silently (the AMM math would
+still work, just against a moved-under rate). Audit: there must be exactly
+one SY CPI in the flash handler, at step 2.
+
+---
+
+### I-F4 — PT conservation during flash
+
+**Statement.** `market.financials.pt_balance` is decremented only at step 7
+(the AMM commit via `apply_trade_pt`). Between step 4 (flash transfer) and
+step 6 (repayment verify), the actual token escrow balance is temporarily
+*less* than `pt_balance` by exactly `flash_pt_debt`. At ix end, the
+invariant `pt_balance == escrow_pt.amount` is restored.
+
+**Why.** This is the one acknowledged hole in I-M1 (reserve accounting ==
+escrow). The flash window is a documented, guarded violation; the
+reconciliation at step 7 returns everything to normal.
+
+**Where enforced.** By construction of the handler algorithm — step 7
+always runs if the callback returns `Ok`, and if the callback returns
+`Err` the entire tx reverts (including the step-4 PT transfer). The
+`flash_pt_debt` field is the guard that documents and gates the window.
+
+**Tests.**
+[tests/clearstone-fusion-flash.ts](tests/clearstone-fusion-flash.ts) —
+"happy path" test asserts:
+- `pt_balance` decreased by exactly `pt_out`
+- `escrow_pt.amount` decreased by exactly `pt_out`
+- `flash_pt_debt == 0` at tx end
+
+**Residual risk.** A callback that partially-writes the escrow could leave
+the escrow in a state where a reload would see a mid-CPI balance. But
+`token_sy_escrow.reload()` in step 6 and `escrow_pt.amount` comparison at
+tx end both fetch the committed post-CPI state from the account data —
+no intermediate state is visible.
+
+---
+
 ## Invariant-coverage audit checklist
 
 Run before every PR that touches state or CPI:
@@ -538,3 +667,11 @@ Run before every PR that touches state or CPI:
       `delta_mint` / `clearstone-finance` dependency (I-KYC2).
 - [ ] Every `Accounts` struct carrying `mint_sy` types it as
       `InterfaceAccount<Mint>` (I-KYC3).
+- [ ] `market.flash_pt_debt` is written only by `flash_swap_pt` (step 4
+      and step 8). Grep for `flash_pt_debt` in core — any other write
+      site is a bug (I-F1).
+- [ ] `flash_swap_pt` contains exactly one `do_get_sy_state` / other SY
+      CPI, at step 2. No second rate read after the callback (I-F3).
+- [ ] Every market-mutating handler's `validate` gates on
+      `market.flash_pt_debt == 0`; new handlers added to MarketTwo must
+      add the same gate (I-F1).

@@ -808,6 +808,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "clearstone-fusion"
+version = "0.1.0"
+source = "git+https://github.com/1delta-DAO/clearstone-fusion-protocol#7c2b186d14ce05b37877608cbad66c055ac7cfcd"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "muldiv",
+]
+
+[[package]]
 name = "clearstone_core"
 version = "0.1.0"
 dependencies = [
@@ -861,6 +871,16 @@ dependencies = [
  "anchor-spl",
  "clearstone_core",
  "generic_exchange_rate_sy",
+ "getrandom 0.2.10",
+]
+
+[[package]]
+name = "clearstone_solver_callback"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "clearstone-fusion",
  "getrandom 0.2.10",
 ]
 
@@ -2017,6 +2037,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mock_flash_callback"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "clearstone_core",
+ "getrandom 0.2.10",
+]
+
+[[package]]
 name = "mock_klend"
 version = "0.1.0"
 dependencies = [
@@ -2038,6 +2068,12 @@ dependencies = [
  "solana-program",
  "thiserror 1.0.69",
 ]
+
+[[package]]
+name = "muldiv"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "956787520e75e9bd233246045d19f42fb73242759cc57fba9611d940ae96d4b0"
 
 [[package]]
 name = "num"

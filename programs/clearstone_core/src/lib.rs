@@ -186,6 +186,21 @@ pub mod clearstone_core {
         instructions::market_two::trade_pt::handler(ctx, net_trader_pt, sy_constraint)
     }
 
+    /// Pendle-style flash borrow of PT against the market's escrow.
+    ///
+    /// Sends `pt_out` PT from escrow to the caller, CPIs into
+    /// `callback_program` with a fixed ABI, then requires the callback to
+    /// have repaid the market's SY escrow by the AMM-quoted amount before
+    /// returning. See INTENT_FLASH_PLAN.md for the full spec and audit notes.
+    #[instruction(discriminator = [18])]
+    pub fn flash_swap_pt<'info>(
+        ctx: Context<'_, '_, '_, 'info, FlashSwapPt<'info>>,
+        pt_out: u64,
+        callback_data: Vec<u8>,
+    ) -> Result<FlashSwapPtEvent> {
+        instructions::market_two::flash_swap_pt::handler(ctx, pt_out, callback_data)
+    }
+
     /// Sell YT for SY
     #[instruction(discriminator = [1])]
     pub fn sell_yt<'i>(

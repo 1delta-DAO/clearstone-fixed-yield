@@ -1,0 +1,103 @@
+{
+  "address": "9AduMJSRv79G5UBrj3WZCK1KzpzmZ4zAKV4Mud4Z4hvF",
+  "metadata": {
+    "name": "mock_flash_callback",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Test-only callback program for core.flash_swap_pt. Configurable per-invocation behavior to exercise happy/short-repay/nested-flash/no-op paths without needing fusion deployed."
+  },
+  "instructions": [
+    {
+      "name": "on_flash_pt_received",
+      "discriminator": [
+        206,
+        129,
+        57,
+        212,
+        98,
+        189,
+        226,
+        67
+      ],
+      "accounts": [
+        {
+          "name": "market"
+        },
+        {
+          "name": "caller_pt_dst",
+          "writable": true
+        },
+        {
+          "name": "token_sy_escrow",
+          "writable": true
+        },
+        {
+          "name": "mint_sy"
+        },
+        {
+          "name": "solver",
+          "signer": true
+        },
+        {
+          "name": "core_token_program"
+        },
+        {
+          "name": "solver_sy_src",
+          "docs": [
+            "Solver's own SY ATA — pre-funded by the test harness to cover the repay."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_pt_escrow",
+          "writable": true
+        },
+        {
+          "name": "token_fee_treasury_sy",
+          "writable": true
+        },
+        {
+          "name": "address_lookup_table"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "self_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        }
+      ],
+      "args": [
+        {
+          "name": "_pt_received",
+          "type": "u64"
+        },
+        {
+          "name": "sy_required",
+          "type": "u64"
+        },
+        {
+          "name": "data",
+          "type": "bytes"
+        }
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "MissingModeByte",
+      "msg": "callback_data must start with a mode byte (0..=3)"
+    },
+    {
+      "code": 6001,
+      "name": "UnknownMode",
+      "msg": "Mode byte out of range"
+    }
+  ]
+}

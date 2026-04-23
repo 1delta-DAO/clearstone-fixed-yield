@@ -2,6 +2,10 @@
 members = ["libraries/*", "programs/*", "reference_adapters/*", "periphery/*"]
 resolver = "2"
 
+# Keep the external clearstone-fusion dependency version-locked across every
+# workspace crate that pulls it in (currently clearstone_solver_callback).
+# Bump the rev here when upstream cuts a new tag.
+
 [profile.release]
 overflow-checks = true
 lto = "fat"

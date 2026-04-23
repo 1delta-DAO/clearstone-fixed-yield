@@ -80,4 +80,10 @@ pub enum ExponentCoreError {
     MinOperationSizeZero,
     #[msg("Action is not allowed post-init")]
     ImmutablePostInit,
+    #[msg("A flash_swap_pt is already in progress on this market")]
+    NestedFlashBlocked,
+    #[msg("Flash callback did not deposit enough SY into escrow")]
+    FlashRepayInsufficient,
+    #[msg("Market lacks sufficient PT liquidity for the requested flash")]
+    InsufficientPtLiquidity,
 }

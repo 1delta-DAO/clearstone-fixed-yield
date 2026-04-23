@@ -16,6 +16,8 @@ export interface SolverClients {
   kaminoSyAdapter: anchor.Program;
   fusion: anchor.Program<ClearstoneFusion>;
   fusionProgramId: PublicKey;
+  /** Reference callback program id — solver passes this to core.flash_swap_pt. */
+  callbackProgramId: PublicKey;
 }
 
 /** Program ids (mainnet-ish). Override via env for localnet / devnet. */
@@ -27,6 +29,9 @@ const KAMINO_SY_ID = new PublicKey(
 );
 const FUSION_ID = new PublicKey(
   process.env.FUSION_PROGRAM ?? "9ShSnLUcWeg5BZzokj8mdo9cNHARCKa42kwmqSdBNM6J"
+);
+const CALLBACK_ID = new PublicKey(
+  process.env.CALLBACK_PROGRAM ?? "27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP"
 );
 
 export async function loadClients(args: {
@@ -51,6 +56,7 @@ export async function loadClients(args: {
     kaminoSyAdapter: new anchor.Program(adapterIdl, provider),
     fusion: loadFusionProgram(provider),
     fusionProgramId: FUSION_ID,
+    callbackProgramId: CALLBACK_ID,
   };
 }
 

@@ -164,6 +164,12 @@ impl<'i> TradePt<'i> {
     }
 
     pub fn validate(&self, net_trader_pt: i64) -> Result<()> {
+        // I-F1: no market-mutating entrypoint may fire while a flash is open.
+        require!(
+            self.market.flash_pt_debt == 0,
+            ExponentCoreError::NestedFlashBlocked
+        );
+
         if net_trader_pt > 0 {
             require!(
                 self.market.check_status_flags(STATUS_CAN_BUY_PT),

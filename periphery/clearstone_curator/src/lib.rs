@@ -24,6 +24,11 @@ use clearstone_core::state::{MarketTwo, Vault as CoreVault};
 use generic_exchange_rate_sy::program::GenericExchangeRateSy;
 use precise_number::Number;
 
+pub mod roll_delegation;
+pub use roll_delegation::{
+    RollDelegation, RollDelegationError, ROLL_DELEGATION_SEED,
+};
+
 declare_id!("831zw8r2fGwRB1QpuRU3gZHZBFYYHBHeG7RbKUz9ssGm");
 
 pub const CURATOR_VAULT_SEED: &[u8] = b"curator_vault";
@@ -635,6 +640,25 @@ pub mod clearstone_curator {
         });
         Ok(())
     }
+
+    // ---------- Roll delegations (v2 permissioning) ----------
+    //
+    // User-signed delegations let any keeper crank rolls — the
+    // on-chain handlers enforce slippage + allocation-set bounds the
+    // user signed off on. See roll_delegation.rs + the design spec at
+    // clearstone-finance/CURATOR_ROLL_DELEGATION.md.
+
+    pub fn create_delegation(
+        ctx: Context<CreateDelegation>,
+        max_slippage_bps: u16,
+        ttl_slots: u64,
+    ) -> Result<()> {
+        roll_delegation::create_delegation(ctx, max_slippage_bps, ttl_slots)
+    }
+
+    pub fn close_delegation(ctx: Context<CloseDelegation>) -> Result<()> {
+        roll_delegation::close_delegation(ctx)
+    }
 }
 
 // -------------- State --------------
@@ -1173,4 +1197,51 @@ fn _reserve_math_placeholder(v: &CuratorVault) -> Number {
     } else {
         Number::from_ratio(v.total_assets as u128, v.total_shares as u128)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Roll-delegation account contexts.
+// Kept in this file so Anchor's `#[program]` macro can resolve the
+// generated `__client_accounts_*` modules. The handler bodies + state
+// struct live in roll_delegation.rs.
+// ---------------------------------------------------------------------------
+
+#[derive(Accounts)]
+pub struct CreateDelegation<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    /// The vault this delegation authorizes rolls for. Read-only — the
+    /// handler just reads `allocations` for the commitment.
+    #[account(
+        seeds = [CURATOR_VAULT_SEED, vault.curator.as_ref(), vault.base_mint.as_ref()],
+        bump = vault.bump,
+    )]
+    pub vault: Box<Account<'info, CuratorVault>>,
+
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = RollDelegation::SIZE,
+        seeds = [ROLL_DELEGATION_SEED, vault.key().as_ref(), user.key().as_ref()],
+        bump,
+    )]
+    pub delegation: Box<Account<'info, RollDelegation>>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct CloseDelegation<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        mut,
+        close = user,
+        has_one = user @ RollDelegationError::VaultMismatch,
+        seeds = [ROLL_DELEGATION_SEED, delegation.vault.as_ref(), user.key().as_ref()],
+        bump = delegation.bump,
+    )]
+    pub delegation: Box<Account<'info, RollDelegation>>,
 }

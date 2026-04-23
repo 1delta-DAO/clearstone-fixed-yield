@@ -195,6 +195,47 @@ through `v_pt_balance()` / `v_sy_balance()` which add the virtual
 floor. A 1-wei donation to `escrow_sy` inflates the real balance but
 the virtualized view barely moves — this is what I-M3 buys you.
 
+### Flash swap PT (zero-inventory fills)
+
+```
+caller              core.flash_swap_pt             callback program
+│                        │                                 │
+│                        │  get_sy_state CPI ─────────►    │  (SY adapter)
+│                        │  ◄──── rate snapshot ───────    │
+│                        │  quote_trade_pt(rate, ...)      │
+│                        │                                 │
+│                        │  escrow_pt → caller_pt_dst      │
+│                        │  flash_pt_debt = pt_out         │
+│                        │                                 │
+│                        │  CPI callback_program ─────►    │  on_flash_pt_received
+│                        │                                 │    does whatever:
+│                        │                                 │    fusion.fill / strip /
+│                        │                                 │    bilateral match, etc.
+│                        │                                 │    deposits SY back into
+│                        │                                 │    token_sy_escrow
+│                        │  ◄──────────────────────────    │
+│                        │                                 │
+│                        │  escrow_sy delta ≥ quote ?      │
+│                        │    yes → treasury_fee leg       │
+│                        │    no  → FlashRepayInsufficient │
+│                        │                                 │
+│                        │  apply_trade_pt(SAME rate)      │
+│                        │  flash_pt_debt = 0              │
+```
+
+The rate snapshot is the key bit: read exactly once, used for both the
+upfront quote and the final commit. Untrusted callback code cannot move
+the SY program's rate between the two points (I-F3).
+
+Every other market-mutating handler (`trade_pt`, `buy_yt`, `sell_yt`,
+`deposit_liquidity`, `withdraw_liquidity`) gates on
+`flash_pt_debt == 0` — nested flash is blocked (I-F1). Cross-market
+flashes are permitted; each market has its own debt field.
+
+Reference callback — fusion-fill delivery for PT orders —
+[clearstone_solver_callback](periphery/clearstone_solver_callback/src/lib.rs).
+Full spec and invariant proofs: [INTENT_FLASH_PLAN.md](INTENT_FLASH_PLAN.md).
+
 ## Lifecycle of a vault
 
 ```

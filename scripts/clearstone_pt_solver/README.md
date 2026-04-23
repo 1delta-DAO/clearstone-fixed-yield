@@ -27,6 +27,27 @@ A production solver. MEV-resistance, priority-fee bidding, slippage protection,
 inventory management, and off-chain order indexing are all out of scope. This is
 a proof-of-composition demo.
 
+## Zero-inventory flash fills (default)
+
+Default routing is **Pendle-style flash**. When the AMM has PT liquidity, the
+solver runs:
+
+```
+  [Ed25519.verify(maker_sig)]
+  [core.flash_swap_pt(pt_amount, callback_data=borsh(OrderConfig + u64))]
+      └─► clearstone_solver_callback.on_flash_pt_received
+            ├─► clearstone_fusion.fill      (pulls maker.src, delivers PT)
+            └─► transfer_checked            (solver.src → market.escrow_sy)
+```
+
+Solver holds **zero PT** at every ix boundary. Core's I-F2 (flash repayment)
+enforces that the callback topped up the market's SY escrow by the quoted
+repayment amount before the ix returns.
+
+To fall back to the inventory path (for debugging / A/B), set `DISABLE_FLASH=1`.
+The solver then picks between `trade_pt` and `strip` based on AMM depth, using
+its own just-in-time src inventory.
+
 ## What it IS
 
 - A TS skeleton showing how to decode a fusion `OrderConfig`, recognize

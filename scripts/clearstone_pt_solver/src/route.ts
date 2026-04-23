@@ -38,6 +38,18 @@ export type FillPlan =
       dstAmount: BN;
       /** YT the solver keeps as profit after stripping. */
       ytProfit: BN;
+    }
+  | {
+      // Pendle-style flash fill. Solver holds ZERO inventory at fill time —
+      // core.flash_swap_pt lends PT, callback program settles fusion and
+      // repays escrow from the pulled src, all atomically.
+      kind: "flashFusion";
+      vault: PublicKey;
+      market: PublicKey;
+      /** PT amount the flash will borrow. Usually equals order.min_dst_amount. */
+      ptAmount: BN;
+      /** Fusion fill amount (usually equals the order's src_amount). */
+      fusionFillAmount: BN;
     };
 
 export async function tryRouteOrder(
@@ -64,6 +76,21 @@ export async function tryRouteOrder(
 
   const ptBalance: BN = market.financials.ptBalance;
   if (ptBalance.gte(minDstAmount)) {
+    // Flash-preferred path when AMM has PT liquidity.
+    //
+    // Flash is capital-free for the solver (vs. `tradePt` which requires
+    // just-in-time src inventory). We always pick flash when available and
+    // fall back to tradePt only if flash is disabled (env override) — kept
+    // here for completeness so an operator can A/B the two paths.
+    if (process.env.DISABLE_FLASH !== "1") {
+      return {
+        kind: "flashFusion",
+        vault: meta.vault,
+        market: market.publicKey,
+        ptAmount: minDstAmount,
+        fusionFillAmount: srcAmount,
+      };
+    }
     return {
       kind: "tradePt",
       vault: meta.vault,

@@ -30,6 +30,7 @@ Program ID (localnet): `EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC`.
 | `[11]` | `market_two_deposit_liquidity` | any | `pt_intent, sy_intent, min_lp_out: u64` | market.financials, LP mint supply |
 | `[12]` | `market_two_withdraw_liquidity` | LP holder | `lp_in, min_pt_out, min_sy_out: u64` | market.financials, LP mint supply |
 | `[17]` | `trade_pt` | any | `net_trader_pt: i64, sy_constraint: i64` | market.financials, user PT/SY balances |
+| `[18]` | `flash_swap_pt` | any | `pt_out: u64, callback_data: Vec<u8>` | market.financials (post-repay commit) |
 | `[19]` | `collect_emission` | position owner | `index: u16, amount: Amount` | vault.emissions, yield_position |
 
 ### Init instructions (permissionless, creator defines curator)
@@ -150,7 +151,55 @@ From [error.rs](programs/clearstone_core/src/error.rs):
   (I-C1), `SyInvalidExchangeRate` (I-C3), `SyEmissionIndexesMismatch`
   (I-C3), `FeeExceedsProtocolCap` (I-E1), `FeeNotRatchetDown` (I-E2),
   `DurationOutOfBounds`, `StartTimestampInPast`, `MinOperationSizeZero`,
-  `ImmutablePostInit`.
+  `ImmutablePostInit`, `NestedFlashBlocked` (I-F1),
+  `FlashRepayInsufficient` (I-F2), `InsufficientPtLiquidity`.
+
+## Flash-swap entrypoint — `[18]` `flash_swap_pt`
+
+Pendle-style PT flash borrow with callback. Sends `pt_out` PT from the
+market's escrow to the caller, CPIs `callback_program` with a fixed ABI,
+then requires the callback to have repaid the market's SY escrow by the
+AMM-quoted amount before returning. Full spec in
+[INTENT_FLASH_PLAN.md](INTENT_FLASH_PLAN.md); invariants I-F1..I-F4.
+
+**Args:**
+- `pt_out: u64` — PT amount to flash-borrow from `token_pt_escrow`.
+- `callback_data: Vec<u8>` — opaque bytes forwarded to the callback.
+
+**Accounts** (see `FlashSwapPt` in
+[flash_swap_pt.rs](programs/clearstone_core/src/instructions/market_two/flash_swap_pt.rs)):
+`caller`, `market`, `caller_pt_dst`, `token_sy_escrow`, `token_pt_escrow`,
+`token_fee_treasury_sy`, `mint_sy`, `callback_program`, `address_lookup_table`,
+`sy_program`, `token_program` + event_cpi pair.
+
+**Callback ABI.** Core CPIs `callback_program` with the Anchor discriminator
+`sha256("global:on_flash_pt_received")[..8]`. Callback must:
+- Read `(pt_received: u64, sy_required: u64, data: Vec<u8>)` as its args.
+- Receive 6 fixed accounts + N `remaining_accounts` (solver-forwarded from
+  core's `remaining_accounts`). Fixed prefix: `market`, `caller_pt_dst`,
+  `token_sy_escrow`, `mint_sy`, `caller`, `token_program`.
+- Ensure `token_sy_escrow.amount` grows by at least `sy_required` before
+  returning.
+
+Reference callback: [clearstone_solver_callback](periphery/clearstone_solver_callback/src/lib.rs)
+(fusion-fill delivery for PT orders).
+
+**Event.**
+```rust
+FlashSwapPtEvent {
+    caller: Pubkey,
+    market: Pubkey,
+    callback_program: Pubkey,
+    pt_out: u64,
+    sy_in: u64,
+    sy_fee: u64,
+    sy_exchange_rate: Number,
+    timestamp: i64,
+}
+```
+
+**New error codes (on top of existing).** `NestedFlashBlocked` (I-F1),
+`FlashRepayInsufficient` (I-F2), `InsufficientPtLiquidity`.
 
 ## SY-mint account on token-moving ixs (post M-KYC-4)
 

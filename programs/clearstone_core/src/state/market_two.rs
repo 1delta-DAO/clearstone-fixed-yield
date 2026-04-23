@@ -91,6 +91,18 @@ pub struct MarketTwo {
 
     /// Unique seed id for the market
     pub seed_id: [u8; 1],
+
+    /// Pending PT owed back to this market by an in-flight `flash_swap_pt`.
+    /// Zero at rest. Non-zero means: (a) a flash callback is currently
+    /// executing and (b) no other `flash_swap_pt` may enter (blocks nested
+    /// flash reentry). See INTENT_FLASH_PLAN.md §5.3 and I-F1 in
+    /// INVARIANTS.md.
+    ///
+    /// Appended at the end of the struct so existing markets' layouts are
+    /// not disturbed — the realloc_market ix grows them to include this
+    /// field on-demand. Markets without the appended bytes must not call
+    /// `flash_swap_pt` (guarded at handler entry).
+    pub flash_pt_debt: u64,
 }
 
 /// Financial parameters for the market
@@ -212,7 +224,10 @@ impl MarketTwo {
         LiquidityNetBalanceLimits::SIZE_OF +
 
         // Seed id
-        1
+        1 +
+
+        // flash_pt_debt (see I-F1)
+        8
     }
 
     pub fn is_expired(&self, now: u64) -> bool {
@@ -313,6 +328,7 @@ impl MarketTwo {
                 window_start_net_balance: 0,
             },
             seed_id: [seed_id],
+            flash_pt_debt: 0,
         }
     }
 }
@@ -418,11 +434,96 @@ impl MarketFinancials {
         fee_rate(self.ln_fee_rate_root.into(), self.sec_remaining(now))
     }
 
-    /// Calculate SY change from PT trade
-    /// And update the state of the market
-    /// - change sy balance
-    /// - change pt balance
-    /// - change last_ln_implied_rate
+    /// Pure quote — compute the trade outcome WITHOUT mutating self.
+    ///
+    /// Used by `trade_pt` (which then commits) and by `flash_swap_pt` (which
+    /// quotes up-front, runs a callback, then commits with the same
+    /// pre-snapshot rate). Factored out so the flash path can lock in the
+    /// repayment amount before yielding control to untrusted code.
+    pub fn quote_trade_pt(
+        &self,
+        sy_exchange_rate: Number,
+        net_trader_pt: i64,
+        now: u64,
+        is_current_flash_swap: bool,
+        fee_treasury_sy_bps: u16,
+    ) -> TradeResult {
+        let is_buy = net_trader_pt > 0;
+
+        // ceil on asset balance when buying PT (make asset cheaper)
+        // floor on asset balance when selling PT (make asset more expensive)
+        let asset_balance = self.asset_balance(sy_exchange_rate);
+        let asset_balance = if is_buy {
+            asset_balance.ceil_u64()
+        } else {
+            asset_balance.floor_u64()
+        };
+
+        let current_rate_scalar = self.current_rate_scalar(now);
+        let current_rate_anchor = self.current_rate_anchor(sy_exchange_rate, now);
+        let current_fee_rate = self.cur_fee_rate(now);
+
+        let trade_result = exponent_time_curve::math::trade(
+            self.v_pt_balance(),
+            asset_balance,
+            current_rate_scalar,
+            current_rate_anchor,
+            current_fee_rate,
+            net_trader_pt as f64,
+            is_current_flash_swap,
+        );
+
+        let net_trader_sy =
+            net_trader_sy_from_net_trader_asset(trade_result.net_trader_asset, sy_exchange_rate);
+        let sy_fee = sy_fee_from_asset_fee(trade_result.asset_fee, sy_exchange_rate);
+        let treasury_fee_amount = (sy_fee * fee_treasury_sy_bps as u64) / 10_000;
+
+        TradeResult {
+            sy_fee,
+            net_trader_sy,
+            net_trader_pt,
+            treasury_fee_amount,
+        }
+    }
+
+    /// Apply a previously-computed `TradeResult` (from `quote_trade_pt`) to
+    /// the market's balances and implied rate. Flash-fill path calls this
+    /// AFTER the callback has successfully repaid — at which point the
+    /// `sy_exchange_rate` and `now` must match the values that went into the
+    /// matching quote to preserve rate-freshness (I-F3).
+    pub fn apply_trade_pt(
+        &mut self,
+        sy_exchange_rate: Number,
+        now: u64,
+        result: &TradeResult,
+    ) {
+        let market_sy_change = result.net_trader_sy.abs() as u64;
+        if result.net_trader_pt > 0 {
+            self.dec_pt_balance(result.net_trader_pt as u64);
+            self.inc_sy_balance(market_sy_change);
+        } else {
+            self.inc_pt_balance((-result.net_trader_pt) as u64);
+            self.dec_sy_balance(market_sy_change);
+        }
+        self.dec_sy_balance(result.treasury_fee_amount);
+
+        // Re-derive the curve parameters with the SAME snapshot inputs the
+        // quote used. Using the same rate ensures the implied-rate write is
+        // consistent with the quoted trade.
+        let current_rate_scalar = self.current_rate_scalar(now);
+        let current_rate_anchor = self.current_rate_anchor(sy_exchange_rate, now);
+        let new_ln_implied_rate = exponent_time_curve::math::ln_implied_rate(
+            self.v_pt_balance(),
+            self.asset_balance(sy_exchange_rate).floor_u64(),
+            current_rate_scalar,
+            current_rate_anchor,
+            self.sec_remaining(now),
+        );
+        self.last_ln_implied_rate = new_ln_implied_rate.into();
+    }
+
+    /// Calculate SY change from PT trade and update the state of the market.
+    /// Combines `quote_trade_pt` + `apply_trade_pt` — the classic spot path.
     ///
     /// # Arguments
     /// - `sy_exchange_rate` - The exchange rate of the SY token to the base asset
@@ -437,90 +538,15 @@ impl MarketFinancials {
         is_current_flash_swap: bool,
         fee_treasury_sy_bps: u16,
     ) -> TradeResult {
-        // if the net pt to the trader is positive, he is buying
-        let is_buy = net_trader_pt > 0;
-        // Get the market liquidity in terms of base asset
-
-        // ceil on asset balance when buying PT (make asset cheaper)
-        // floor on asset balance when selling PT (make asset more expensive)
-        let asset_balance = self.asset_balance(sy_exchange_rate);
-
-        let asset_balance = if is_buy {
-            asset_balance.ceil_u64()
-        } else {
-            asset_balance.floor_u64()
-        };
-
-        // Pre-compute the current rate scalar and rate anchor
-        let current_rate_scalar = self.current_rate_scalar(now);
-        let current_rate_anchor = self.current_rate_anchor(sy_exchange_rate, now);
-        let current_fee_rate = self.cur_fee_rate(now);
-
-        // Calculate the trade result — curve sees virtualized pt.
-        let trade_result = exponent_time_curve::math::trade(
-            self.v_pt_balance(),
-            asset_balance,
-            current_rate_scalar,
-            current_rate_anchor,
-            current_fee_rate,
-            net_trader_pt as f64,
-            is_current_flash_swap,
-        );
-
-        // calc the abs magnitude of the trade in
-        let net_trader_sy =
-            net_trader_sy_from_net_trader_asset(trade_result.net_trader_asset, sy_exchange_rate);
-
-        // the actual change to the market's sy balance is the same as the net change to the trader
-        // if (eventually) a platform fee is taken from the trade, then the market's change in SY balance needs to account for this withdrawal
-        let market_sy_change = net_trader_sy.abs() as u64;
-
-        // Convert fee to SY units
-        let sy_fee = sy_fee_from_asset_fee(trade_result.asset_fee, sy_exchange_rate);
-
-        // Calculate treasury fee amount
-        let treasury_fee_amount = (sy_fee * fee_treasury_sy_bps as u64) / 10_000;
-
-        // Handle changes to market liquidity balances
-        if is_buy {
-            // Buying PT
-
-            // market PT balance goes down
-            self.dec_pt_balance(net_trader_pt as u64);
-
-            // market SY balance goes up
-            self.inc_sy_balance(market_sy_change);
-        } else {
-            // Selling PT
-
-            // market PT balance goes up
-            self.inc_pt_balance((-net_trader_pt) as u64);
-
-            // market SY balance goes down
-            self.dec_sy_balance(market_sy_change);
-        }
-
-        // Deduct treasury fee from SY balance
-        self.dec_sy_balance(treasury_fee_amount);
-
-        // set the new ln implied rate based on the new proportion AFTER all balance adjustments.
-        // Uses virtualized reserves so the implied rate is stable against donation attacks.
-        let new_ln_implied_rate = exponent_time_curve::math::ln_implied_rate(
-            self.v_pt_balance(),
-            self.asset_balance(sy_exchange_rate).floor_u64(),
-            current_rate_scalar,
-            current_rate_anchor,
-            self.sec_remaining(now),
-        );
-
-        self.last_ln_implied_rate = new_ln_implied_rate.into();
-
-        TradeResult {
-            sy_fee,
-            net_trader_sy,
+        let result = self.quote_trade_pt(
+            sy_exchange_rate,
             net_trader_pt,
-            treasury_fee_amount,
-        }
+            now,
+            is_current_flash_swap,
+            fee_treasury_sy_bps,
+        );
+        self.apply_trade_pt(sy_exchange_rate, now, &result);
+        result
     }
 
     pub fn exchange_rate(&self, unix_timestamp: u64) -> f64 {
@@ -940,6 +966,45 @@ mod virtualization_tests {
         let f = fin(50, 50);
         let sy = f.lp_to_sy(10, 10);
         assert!(sy <= 50);
+    }
+
+    /// I-F3 — `quote_trade_pt` followed by `apply_trade_pt` with the same
+    /// inputs must produce the same end state as the fused `trade_pt` call.
+    /// This is the invariant that lets `flash_swap_pt` quote up-front and
+    /// commit later with rate-snapshot consistency.
+    #[test]
+    fn quote_then_apply_matches_trade_pt() {
+        let reserves = 1_000_000_000u64;
+        let mut fused = fin(reserves, reserves);
+        let mut split = fin(reserves, reserves);
+
+        // Realistic curve params: init_rate_anchor=1.05 implies ln_rate = ln(1.05).
+        // The trade() curve asserts post-trade er > 1 (asset > PT) so we need
+        // the rate anchor strictly above 1.
+        fused.ln_fee_rate_root = (1.001_f64).ln(); // fee_rate near 1 + epsilon
+        fused.rate_scalar_root = 40.0;
+        fused.last_ln_implied_rate = (1.05_f64).ln();
+        split.ln_fee_rate_root = fused.ln_fee_rate_root;
+        split.rate_scalar_root = fused.rate_scalar_root;
+        split.last_ln_implied_rate = fused.last_ln_implied_rate;
+
+        let rate = Number::from_natural_u64(1);
+        let now = 1_000_000u64;
+        // well before expiration
+        assert!(fused.expiration_ts > now);
+
+        let fused_result = fused.trade_pt(rate, 100_000_000, now, false, 200);
+        let quote = split.quote_trade_pt(rate, 100_000_000, now, false, 200);
+        split.apply_trade_pt(rate, now, &quote);
+
+        assert_eq!(fused_result.net_trader_pt, quote.net_trader_pt);
+        assert_eq!(fused_result.net_trader_sy, quote.net_trader_sy);
+        assert_eq!(fused_result.sy_fee, quote.sy_fee);
+        assert_eq!(fused_result.treasury_fee_amount, quote.treasury_fee_amount);
+        assert_eq!(fused.pt_balance, split.pt_balance);
+        assert_eq!(fused.sy_balance, split.sy_balance);
+        // f64 rounding: same inputs produce identical outputs.
+        assert_eq!(fused.last_ln_implied_rate, split.last_ln_implied_rate);
     }
 
     /// Virtualized add_liquidity output should match un-virtualized for
