@@ -47,5 +47,20 @@ test = "yarn run mocha --import=tsx --timeout 1000000 tests/**/*.ts"
 [[test.validator.clone]]
 address = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
 
+# Clone the clearstone-finance KYC stack (devnet) so the GovernorWhitelist
+# integration test in tests/clearstone-kyc-pass-through.ts can exercise the
+# real governor.add_participant_via_pool → delta_mint.add_escrow_with_co_authority
+# chain. Pinned to the M-KYC-0 release program ids.
+[[test.validator.clone]]
+address = "BKprvLqNUDCGrpxddppHHQ3UBhof8J5axyexDyctX1xy" # delta_mint
+
+[[test.validator.clone]]
+address = "6xqW3D1ebp5WjbYh4vwar7ponxrpEaQiVG6uhBYVZtJi" # governor
+
+# Clone Civic Gateway program (delta-mint confidential-transfer requires it
+# for self-registration paths exercised by governor::self_register).
+[[test.validator.clone]]
+address = "gatem74V238djXdzWnJf94Wo1DcnuGkfijbf3AuBhfs"
+
 [test.validator]
-url = "https://api.mainnet-beta.solana.com"
+url = "https://api.devnet.solana.com"

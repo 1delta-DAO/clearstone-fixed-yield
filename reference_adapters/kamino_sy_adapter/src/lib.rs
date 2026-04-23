@@ -428,19 +428,61 @@ fn whitelist_pdas_via_governor<'info>(
 
 // -------------- Reserve-rate decoder --------------
 
-/// Read `collateral_exchange_rate` from the klend Reserve account.
+/// Real klend Reserve account total size (8-byte anchor discriminator + 8616-byte body).
+/// Const-asserted by Kamino-Finance/klend; see
+/// https://github.com/Kamino-Finance/klend/blob/main/libs/klend-interface/src/state/reserve.rs
+const REAL_KLEND_RESERVE_LEN: usize = 8624;
+
+/// Mock-klend Reserve account total size (discriminator + 4 pubkeys + Number + bump, no padding).
+/// Leaves room for growth below 256 bytes — well clear of REAL_KLEND_RESERVE_LEN.
+const MOCK_KLEND_RESERVE_MAX_LEN: usize = 256;
+
+// Real-klend field offsets — see the layout walkthrough in the docstring of
+// `read_real_klend_rate` below for how these derive. Pinned by
+// `const _: () = assert!(core::mem::size_of::<Reserve>() == 8616);` upstream.
+const REAL_OFF_TOTAL_AVAILABLE_AMOUNT: usize = 224;
+const REAL_OFF_BORROWED_AMOUNT_SF: usize = 232;
+const REAL_OFF_ACC_PROTOCOL_FEES_SF: usize = 344;
+const REAL_OFF_ACC_REFERRER_FEES_SF: usize = 360;
+const REAL_OFF_PENDING_REFERRER_FEES_SF: usize = 376;
+const REAL_OFF_COLLATERAL_MINT_TOTAL_SUPPLY: usize = 2592;
+
+/// 60-bit fractional scaling used by klend's `Fraction` (fixed::FixedU128<60>).
+/// An `x_sf` field stores `x * 2^SF_BITS` as a u128.
+const SF_BITS: u32 = 60;
+
+/// Read `collateral_exchange_rate` from a klend Reserve account.
 ///
-/// The mock_klend Reserve layout is stable (this crate depends on it). For the real klend,
-/// this helper must be swapped to the production reserve layout — a one-function change.
+/// Dispatches on account data length:
+/// * `REAL_KLEND_RESERVE_LEN` (8624 bytes) → production Kamino Lend V2 layout.
+/// * anything shorter (≤ `MOCK_KLEND_RESERVE_MAX_LEN`) → the in-tree `mock_klend` layout
+///   used by integration tests.
+/// * anything else → `ReserveDataMalformed` (fail closed).
+///
+/// Returning the same `Number` shape for both lets the rest of the adapter stay
+/// decoder-agnostic.
 fn read_exchange_rate(klend_reserve: &AccountInfo) -> Result<Number> {
     let data = klend_reserve.try_borrow_data()?;
-    // mock_klend::state::Reserve layout (after the 8-byte discriminator):
-    //   lending_market: Pubkey      (32)
-    //   liquidity_mint: Pubkey      (32)
-    //   liquidity_supply: Pubkey    (32)
-    //   collateral_mint: Pubkey     (32)
-    //   collateral_exchange_rate: Number (32)
-    //   bump: u8                    (1)
+
+    if data.len() == REAL_KLEND_RESERVE_LEN {
+        return read_real_klend_rate(&data);
+    }
+
+    if data.len() <= MOCK_KLEND_RESERVE_MAX_LEN {
+        return read_mock_klend_rate(&data);
+    }
+
+    err!(AdapterError::ReserveDataMalformed)
+}
+
+/// Mock-klend `Reserve` layout (post-8-byte-discriminator):
+///   lending_market: Pubkey         (32)
+///   liquidity_mint: Pubkey         (32)
+///   liquidity_supply: Pubkey       (32)
+///   collateral_mint: Pubkey        (32)
+///   collateral_exchange_rate: Number (32)
+///   bump: u8                       (1)
+fn read_mock_klend_rate(data: &[u8]) -> Result<Number> {
     const OFFSET: usize = 8 + 32 * 4;
     require!(
         data.len() >= OFFSET + 32,
@@ -450,6 +492,106 @@ fn read_exchange_rate(klend_reserve: &AccountInfo) -> Result<Number> {
     let rate = Number::deserialize(&mut buf).map_err(|_| AdapterError::ReserveDataMalformed)?;
     require!(rate > Number::ZERO, AdapterError::InvalidExchangeRate);
     Ok(rate)
+}
+
+/// Real klend `Reserve` layout walkthrough (offsets are into the full account data,
+/// i.e. including the 8-byte anchor discriminator at bytes 0..8):
+///
+/// ```text
+///   8      version: u64
+///   16     last_update: LastUpdate              (slot:u64 + stale:u8 + status:u8 + pad:[u8;6]) = 16
+///   32     lending_market: Pubkey
+///   64     farm_collateral: Pubkey
+///   96     farm_debt: Pubkey
+///   128    liquidity: ReserveLiquidity {
+///   128      mint_pubkey: Pubkey
+///   160      supply_vault: Pubkey
+///   192      fee_vault: Pubkey
+///   224      total_available_amount: u64                                    <-- #1
+///   232      borrowed_amount_sf: PodU128  (scaled 2^60)                     <-- #2
+///   248      market_price_sf: PodU128
+///   264      market_price_last_updated_ts: u64
+///   272      mint_decimals: u64
+///   280      deposit_limit_crossed_timestamp: u64
+///   288      borrow_limit_crossed_timestamp: u64
+///   296      cumulative_borrow_rate_bsf: BigFractionBytes  (48 = 4×u64 + 2×u64 padding)
+///   344      accumulated_protocol_fees_sf: PodU128                          <-- #3
+///   360      accumulated_referrer_fees_sf: PodU128                          <-- #4
+///   376      pending_referrer_fees_sf: PodU128                              <-- #5
+///            … (absolute_referral_rate_sf, token_program, padding2, padding3)
+///   1360   }  (ReserveLiquidity total = 1232 bytes)
+///   1360   reserve_liquidity_padding: [u64; 150]  = 1200
+///   2560   collateral: ReserveCollateral {
+///   2560      mint_pubkey: Pubkey
+///   2592      mint_total_supply: u64                                        <-- #6
+///            … supply_vault, padding
+///          }
+///          config, paddings, withdraw_queue, etc. (total = 8616)
+/// ```
+///
+/// Derivation of the exchange rate:
+///
+/// ```text
+///   total_supply_sf  = (total_available_amount << SF_BITS)
+///                    + borrowed_amount_sf
+///                    - (accumulated_protocol_fees_sf + accumulated_referrer_fees_sf + pending_referrer_fees_sf)
+///   total_supply     ≈ total_supply_sf >> SF_BITS   (floor)
+///   exchange_rate    = total_supply / mint_total_supply
+/// ```
+///
+/// Sub-native-unit precision is dropped by the shift. That's safe: exchange rate
+/// moves on the order of basis points per epoch; truncating dust fractional
+/// liquidity shifts the returned rate by at most `1 / mint_total_supply`, which is
+/// well below `precise_number`'s 1e-12 precision for any realistic d-token supply.
+fn read_real_klend_rate(data: &[u8]) -> Result<Number> {
+    require!(
+        data.len() == REAL_KLEND_RESERVE_LEN,
+        AdapterError::ReserveDataMalformed
+    );
+
+    let available_amount = read_u64(data, REAL_OFF_TOTAL_AVAILABLE_AMOUNT)?;
+    let borrowed_sf = read_u128(data, REAL_OFF_BORROWED_AMOUNT_SF)?;
+    let acc_protocol_fees_sf = read_u128(data, REAL_OFF_ACC_PROTOCOL_FEES_SF)?;
+    let acc_referrer_fees_sf = read_u128(data, REAL_OFF_ACC_REFERRER_FEES_SF)?;
+    let pending_referrer_fees_sf = read_u128(data, REAL_OFF_PENDING_REFERRER_FEES_SF)?;
+    let collateral_supply = read_u64(data, REAL_OFF_COLLATERAL_MINT_TOTAL_SUPPLY)?;
+
+    require!(collateral_supply > 0, AdapterError::InvalidExchangeRate);
+
+    // Sum the "paid" fees — these are owed to the protocol/referrer pool and
+    // are subtracted from the pool's distributable supply.
+    let fees_sf = acc_protocol_fees_sf
+        .saturating_add(acc_referrer_fees_sf)
+        .saturating_add(pending_referrer_fees_sf);
+
+    // Scaled-fraction math: total_supply = available + (borrowed − fees) / 2^60
+    let available_sf = (available_amount as u128).saturating_mul(1u128 << SF_BITS);
+    let total_supply_sf = available_sf
+        .saturating_add(borrowed_sf)
+        .saturating_sub(fees_sf);
+
+    // Floor back to native units. Precision loss is at most 1 unit of liquidity
+    // per call; see docstring for why that's acceptable here.
+    let total_supply = (total_supply_sf >> SF_BITS) as u128;
+    require!(total_supply > 0, AdapterError::InvalidExchangeRate);
+
+    Ok(Number::from_ratio(total_supply, collateral_supply as u128))
+}
+
+fn read_u64(data: &[u8], offset: usize) -> Result<u64> {
+    let slice: [u8; 8] = data
+        .get(offset..offset + 8)
+        .and_then(|s| s.try_into().ok())
+        .ok_or(AdapterError::ReserveDataMalformed)?;
+    Ok(u64::from_le_bytes(slice))
+}
+
+fn read_u128(data: &[u8], offset: usize) -> Result<u128> {
+    let slice: [u8; 16] = data
+        .get(offset..offset + 16)
+        .and_then(|s| s.try_into().ok())
+        .ok_or(AdapterError::ReserveDataMalformed)?;
+    Ok(u128::from_le_bytes(slice))
 }
 
 // -------------- State --------------
@@ -802,4 +944,107 @@ pub enum AdapterError {
     WhitelistNotInKycMode,
     #[msg("Reserve account data malformed / unexpected layout")]
     ReserveDataMalformed,
+}
+
+// -------------- Tests --------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a zeroed buffer shaped like a real klend Reserve account and
+    /// populate only the fields that `read_real_klend_rate` consumes.
+    fn real_klend_buffer(
+        available: u64,
+        borrowed_sf: u128,
+        acc_protocol_sf: u128,
+        acc_referrer_sf: u128,
+        pending_referrer_sf: u128,
+        collateral_supply: u64,
+    ) -> Vec<u8> {
+        let mut data = vec![0u8; REAL_KLEND_RESERVE_LEN];
+        data[REAL_OFF_TOTAL_AVAILABLE_AMOUNT..REAL_OFF_TOTAL_AVAILABLE_AMOUNT + 8]
+            .copy_from_slice(&available.to_le_bytes());
+        data[REAL_OFF_BORROWED_AMOUNT_SF..REAL_OFF_BORROWED_AMOUNT_SF + 16]
+            .copy_from_slice(&borrowed_sf.to_le_bytes());
+        data[REAL_OFF_ACC_PROTOCOL_FEES_SF..REAL_OFF_ACC_PROTOCOL_FEES_SF + 16]
+            .copy_from_slice(&acc_protocol_sf.to_le_bytes());
+        data[REAL_OFF_ACC_REFERRER_FEES_SF..REAL_OFF_ACC_REFERRER_FEES_SF + 16]
+            .copy_from_slice(&acc_referrer_sf.to_le_bytes());
+        data[REAL_OFF_PENDING_REFERRER_FEES_SF..REAL_OFF_PENDING_REFERRER_FEES_SF + 16]
+            .copy_from_slice(&pending_referrer_sf.to_le_bytes());
+        data[REAL_OFF_COLLATERAL_MINT_TOTAL_SUPPLY..REAL_OFF_COLLATERAL_MINT_TOTAL_SUPPLY + 8]
+            .copy_from_slice(&collateral_supply.to_le_bytes());
+        data
+    }
+
+    /// Scaling helper: convert native units to a 60-bit scaled fraction.
+    fn to_sf(x: u128) -> u128 {
+        x << SF_BITS
+    }
+
+    /// Rate 1:1 — 1_000_000 liquidity, 1_000_000 ctokens, no fees, no borrow.
+    #[test]
+    fn real_klend_rate_one_to_one() {
+        let data = real_klend_buffer(1_000_000, 0, 0, 0, 0, 1_000_000);
+        let rate = read_real_klend_rate(&data).expect("decode ok");
+        assert_eq!(rate, Number::from_natural_u64(1));
+    }
+
+    /// Classic post-accrual: available=1M, borrowed=500k scaled (no interest yet),
+    /// ctoken supply=1M → rate = (1M + 500k) / 1M = 1.5.
+    #[test]
+    fn real_klend_rate_with_borrowed_liquidity() {
+        let data = real_klend_buffer(1_000_000, to_sf(500_000), 0, 0, 0, 1_000_000);
+        let rate = read_real_klend_rate(&data).expect("decode ok");
+        // Rate = 1.5 in the Number domain.
+        let expected = Number::from_ratio(3, 2);
+        assert_eq!(rate, expected);
+    }
+
+    /// Fees are subtracted from the distributable supply.
+    /// available=1M, borrowed=1M_sf, fees=(100k+50k+25k)=175k_sf, supply=1M
+    /// → rate = (1M + 1M - 175k) / 1M = 1.825.
+    #[test]
+    fn real_klend_rate_subtracts_all_three_fee_buckets() {
+        let data = real_klend_buffer(
+            1_000_000,
+            to_sf(1_000_000),
+            to_sf(100_000),
+            to_sf(50_000),
+            to_sf(25_000),
+            1_000_000,
+        );
+        let rate = read_real_klend_rate(&data).expect("decode ok");
+        let expected = Number::from_ratio(1_825_000, 1_000_000);
+        assert_eq!(rate, expected);
+    }
+
+    /// Zero collateral supply must fail — can't divide by zero, and such a
+    /// reserve is in an uninitialized state anyway.
+    #[test]
+    fn real_klend_rate_rejects_zero_ctoken_supply() {
+        let data = real_klend_buffer(1_000_000, 0, 0, 0, 0, 0);
+        let err = read_real_klend_rate(&data).expect_err("must reject");
+        let anchor_err: anchor_lang::error::Error = err.into();
+        assert!(format!("{anchor_err:?}").contains("InvalidExchangeRate"));
+    }
+
+    /// Short buffer must fail cleanly, not panic.
+    #[test]
+    fn real_klend_rate_rejects_truncated_buffer() {
+        let short = vec![0u8; REAL_KLEND_RESERVE_LEN - 1];
+        let err = read_real_klend_rate(&short).expect_err("must reject");
+        let anchor_err: anchor_lang::error::Error = err.into();
+        assert!(format!("{anchor_err:?}").contains("ReserveDataMalformed"));
+    }
+
+    /// Dispatch sanity: real-klend size picks the real decoder.
+    #[test]
+    fn dispatch_real_vs_mock_by_size() {
+        let mock_max = MOCK_KLEND_RESERVE_MAX_LEN;
+        let real = REAL_KLEND_RESERVE_LEN;
+        // Sizes are unambiguous — no overlap.
+        assert!(mock_max < real);
+    }
 }

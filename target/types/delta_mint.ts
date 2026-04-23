@@ -1,0 +1,1068 @@
+/**
+ * Program IDL in camelCase format in order to be used in JS/TS.
+ *
+ * Note that this is only a type helper and is not the actual IDL. The original
+ * IDL can be found at `target/idl/delta_mint.json`.
+ */
+export type DeltaMint = {
+  "address": "BKprvLqNUDCGrpxddppHHQ3UBhof8J5axyexDyctX1xy",
+  "metadata": {
+    "name": "deltaMint",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Privacy-centric token with KYC-gated minting and confidential transfers"
+  },
+  "instructions": [
+    {
+      "name": "addEscrow",
+      "docs": [
+        "Adds a program-owned custody PDA to the whitelist as an Escrow role.",
+        "Used by integrating protocols (e.g. clearstone_core) so their SY escrows",
+        "and fee treasuries can hold the KYC-gated mint. Eligible to RECEIVE",
+        "transfers; NOT eligible for `mint_to`."
+      ],
+      "discriminator": [
+        167,
+        241,
+        227,
+        228,
+        118,
+        255,
+        67,
+        73
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "mintConfig"
+          ]
+        },
+        {
+          "name": "mintConfig",
+          "writable": true
+        },
+        {
+          "name": "wallet"
+        },
+        {
+          "name": "whitelistEntry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  104,
+                  105,
+                  116,
+                  101,
+                  108,
+                  105,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mintConfig"
+              },
+              {
+                "kind": "account",
+                "path": "wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "addEscrowWithCoAuthority",
+      "docs": [
+        "Adds an escrow PDA via a co-authority (PDA signer). Used on activated",
+        "pools where mint authority has moved to a pool PDA, e.g. a governor",
+        "pool CPI'ing on behalf of an integrating protocol."
+      ],
+      "discriminator": [
+        253,
+        89,
+        193,
+        226,
+        111,
+        108,
+        237,
+        69
+      ],
+      "accounts": [
+        {
+          "name": "coAuthority",
+          "docs": [
+            "The co-authority (e.g., governor pool PDA). Must match mint_config.co_authority."
+          ],
+          "signer": true
+        },
+        {
+          "name": "payer",
+          "docs": [
+            "The wallet paying rent for the new whitelist entry."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "mintConfig",
+          "writable": true
+        },
+        {
+          "name": "wallet"
+        },
+        {
+          "name": "whitelistEntry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  104,
+                  105,
+                  116,
+                  101,
+                  108,
+                  105,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mintConfig"
+              },
+              {
+                "kind": "account",
+                "path": "wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "addLiquidator",
+      "docs": [
+        "Adds a wallet as an approved liquidator.",
+        "Liquidators can receive dUSDY collateral during Kamino liquidations",
+        "without going through full KYC — they are pre-vetted bot operators."
+      ],
+      "discriminator": [
+        60,
+        33,
+        46,
+        47,
+        162,
+        22,
+        248,
+        97
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "mintConfig"
+          ]
+        },
+        {
+          "name": "mintConfig",
+          "writable": true
+        },
+        {
+          "name": "wallet"
+        },
+        {
+          "name": "whitelistEntry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  104,
+                  105,
+                  116,
+                  101,
+                  108,
+                  105,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mintConfig"
+              },
+              {
+                "kind": "account",
+                "path": "wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "addLiquidatorWithCoAuthority",
+      "docs": [
+        "Adds a wallet as an approved liquidator via a co-authority (PDA signer).",
+        "Mirror of `add_liquidator` for activated pools where mint authority has",
+        "been transferred to a pool PDA. Previously unavailable, which forced",
+        "`add_participant_via_pool(Liquidator)` to fall back to the Holder path",
+        "and store the wrong role."
+      ],
+      "discriminator": [
+        36,
+        70,
+        179,
+        122,
+        96,
+        5,
+        220,
+        174
+      ],
+      "accounts": [
+        {
+          "name": "coAuthority",
+          "docs": [
+            "The co-authority (e.g., governor pool PDA). Must match mint_config.co_authority."
+          ],
+          "signer": true
+        },
+        {
+          "name": "payer",
+          "docs": [
+            "The wallet paying rent for the new whitelist entry."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "mintConfig",
+          "writable": true
+        },
+        {
+          "name": "wallet"
+        },
+        {
+          "name": "whitelistEntry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  104,
+                  105,
+                  116,
+                  101,
+                  108,
+                  105,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mintConfig"
+              },
+              {
+                "kind": "account",
+                "path": "wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "addToWhitelist",
+      "docs": [
+        "Adds a wallet to the KYC whitelist, allowing it to receive minted tokens.",
+        "Only the mint config authority can approve wallets."
+      ],
+      "discriminator": [
+        157,
+        211,
+        52,
+        54,
+        144,
+        81,
+        5,
+        55
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "mintConfig"
+          ]
+        },
+        {
+          "name": "mintConfig",
+          "writable": true
+        },
+        {
+          "name": "wallet"
+        },
+        {
+          "name": "whitelistEntry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  104,
+                  105,
+                  116,
+                  101,
+                  108,
+                  105,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mintConfig"
+              },
+              {
+                "kind": "account",
+                "path": "wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "addToWhitelistWithCoAuthority",
+      "docs": [
+        "Add a wallet to the whitelist using a co-signer.",
+        "The co_authority must be registered in mint_config.co_authority.",
+        "This enables permissionless flows where a PDA (e.g., governor pool)",
+        "can whitelist on behalf of the authority."
+      ],
+      "discriminator": [
+        66,
+        8,
+        177,
+        40,
+        58,
+        87,
+        3,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "coAuthority",
+          "docs": [
+            "The co-authority (e.g., governor pool PDA). Must match mint_config.co_authority."
+          ],
+          "signer": true
+        },
+        {
+          "name": "payer",
+          "docs": [
+            "The wallet paying rent for the new whitelist entry."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "mintConfig",
+          "writable": true
+        },
+        {
+          "name": "wallet"
+        },
+        {
+          "name": "whitelistEntry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  104,
+                  105,
+                  116,
+                  101,
+                  108,
+                  105,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mintConfig"
+              },
+              {
+                "kind": "account",
+                "path": "wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initializeMint",
+      "docs": [
+        "Creates a Token-2022 mint with the confidential transfer extension.",
+        "The mint authority is a PDA owned by this program, ensuring all minting",
+        "goes through the KYC whitelist check."
+      ],
+      "discriminator": [
+        209,
+        42,
+        195,
+        4,
+        129,
+        85,
+        209,
+        44
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "mint",
+          "docs": [
+            "New Token-2022 mint keypair (generated client-side)."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "mintConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mintAuthority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "tokenProgram"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "decimals",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "mintTo",
+      "docs": [
+        "Mints tokens to a whitelisted recipient's token account.",
+        "Fails if the recipient is not on the KYC whitelist."
+      ],
+      "discriminator": [
+        241,
+        34,
+        48,
+        186,
+        37,
+        179,
+        123,
+        192
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "mintConfig"
+          ]
+        },
+        {
+          "name": "mintConfig"
+        },
+        {
+          "name": "mint",
+          "writable": true
+        },
+        {
+          "name": "mintAuthority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "whitelistEntry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  104,
+                  105,
+                  116,
+                  101,
+                  108,
+                  105,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mintConfig"
+              },
+              {
+                "kind": "account",
+                "path": "whitelist_entry.wallet",
+                "account": "whitelistEntry"
+              }
+            ]
+          }
+        },
+        {
+          "name": "destination",
+          "writable": true
+        },
+        {
+          "name": "tokenProgram"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "removeFromWhitelist",
+      "docs": [
+        "Removes a wallet from the whitelist. Closes the PDA and returns rent to authority."
+      ],
+      "discriminator": [
+        7,
+        144,
+        216,
+        239,
+        243,
+        236,
+        193,
+        235
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "mintConfig"
+          ]
+        },
+        {
+          "name": "mintConfig",
+          "writable": true
+        },
+        {
+          "name": "whitelistEntry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  104,
+                  105,
+                  116,
+                  101,
+                  108,
+                  105,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mintConfig"
+              },
+              {
+                "kind": "account",
+                "path": "whitelist_entry.wallet",
+                "account": "whitelistEntry"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "setCoAuthority",
+      "docs": [
+        "Set a co-authority that can also whitelist wallets.",
+        "Only the main authority can set this. Pass Pubkey::default() to disable.",
+        "Handles migration from pre-v2 MintConfig accounts (expands if needed)."
+      ],
+      "discriminator": [
+        228,
+        250,
+        112,
+        197,
+        223,
+        160,
+        249,
+        167
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "mintConfig",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "coAuthority",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "transferAuthority",
+      "docs": [
+        "Transfer mint config authority to a new address (e.g., governor PDA).",
+        "Only current authority can call this."
+      ],
+      "discriminator": [
+        48,
+        169,
+        76,
+        72,
+        229,
+        180,
+        55,
+        161
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "mintConfig"
+          ]
+        },
+        {
+          "name": "mintConfig",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "newAuthority",
+          "type": "pubkey"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "mintConfig",
+      "discriminator": [
+        168,
+        252,
+        88,
+        182,
+        219,
+        205,
+        39,
+        53
+      ]
+    },
+    {
+      "name": "whitelistEntry",
+      "discriminator": [
+        51,
+        70,
+        173,
+        81,
+        219,
+        192,
+        234,
+        62
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "mintEvent",
+      "discriminator": [
+        197,
+        144,
+        146,
+        149,
+        66,
+        164,
+        95,
+        16
+      ]
+    },
+    {
+      "name": "whitelistEvent",
+      "discriminator": [
+        69,
+        134,
+        177,
+        228,
+        216,
+        46,
+        239,
+        8
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "notWhitelisted",
+      "msg": "Recipient is not on the KYC whitelist"
+    },
+    {
+      "code": 6001,
+      "name": "invalidAmount",
+      "msg": "Mint amount must be greater than zero"
+    },
+    {
+      "code": 6002,
+      "name": "liquidatorCannotMint",
+      "msg": "Liquidator role cannot mint new tokens"
+    },
+    {
+      "code": 6003,
+      "name": "mintInitFailed",
+      "msg": "Failed to initialize Token-2022 mint with extensions"
+    }
+  ],
+  "types": [
+    {
+      "name": "mintConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "docs": [
+              "The authority that can whitelist wallets and trigger mints."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "docs": [
+              "The Token-2022 mint address."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "decimals",
+            "docs": [
+              "Mint decimals."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "Bump for this PDA."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "mintAuthorityBump",
+            "docs": [
+              "Bump for the mint_authority PDA."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "totalWhitelisted",
+            "docs": [
+              "Number of currently whitelisted wallets."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "coAuthority",
+            "docs": [
+              "Co-authority (e.g., governor PDA) that can also whitelist wallets.",
+              "Pubkey::default() means disabled. Added in v2 — must be at the end",
+              "so existing accounts deserialize correctly (trailing zeros = default)."
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "mintEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "whitelistEntry",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "docs": [
+              "The whitelisted wallet address."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "mintConfig",
+            "docs": [
+              "The mint config this entry belongs to."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "approved",
+            "docs": [
+              "Whether the wallet is currently approved."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "role",
+            "docs": [
+              "Role: Holder (KYC'd, can mint/hold) or Liquidator (can receive via liquidation only)."
+            ],
+            "type": {
+              "defined": {
+                "name": "whitelistRole"
+              }
+            }
+          },
+          {
+            "name": "approvedAt",
+            "docs": [
+              "Unix timestamp when the wallet was approved."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "Bump for this PDA."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "whitelistEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "approved",
+            "type": "bool"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "whitelistRole",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "holder"
+          },
+          {
+            "name": "liquidator"
+          },
+          {
+            "name": "escrow"
+          }
+        ]
+      }
+    }
+  ]
+};

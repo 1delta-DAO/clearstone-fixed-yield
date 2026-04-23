@@ -35,6 +35,14 @@ import {
   setupMarketOverKamino,
   setupVaultOverKamino,
 } from "./kamino_fixtures";
+import {
+  DELTA_MINT_PROGRAM_ID,
+  GOVERNOR_PROGRAM_ID,
+  fetchWhitelistEntry,
+  findWhitelistEntry,
+  initAndActivateKycPool,
+  loadKycStack,
+} from "./kyc_fixtures";
 
 anchor.setProvider(anchor.AnchorProvider.env());
 const provider = anchor.getProvider() as AnchorProvider;
@@ -249,22 +257,77 @@ describe("kamino_sy_adapter :: kyc_mode is optional", () => {
     }
   });
 
-  // Full-integration GovernorWhitelist test requires the external governor +
-  // delta-mint programs deployed on the local validator (program ids:
-  // 6xqW3D1ebp5WjbYh4vwar7ponxrpEaQiVG6uhBYVZtJi and
-  // BKprvLqNUDCGrpxddppHHQ3UBhof8J5axyexDyctX1xy respectively). Wire-up is
-  // scope for a dedicated KYC e2e suite. Once deployed, the test should:
-  //   1. governor.initialize_pool + governor.activate_wrapping to create a
-  //      dUSDY-style d-token.
-  //   2. kamino_sy_adapter.init_sy_params with KycMode::GovernorWhitelist and
-  //      two clearstone_core escrow PDAs in core_pdas_to_whitelist.
-  //   3. Assert `WhitelistEntry` PDAs are created in delta-mint state with
-  //      `role = Escrow` and `approved = true`.
-  //   4. Assert mint_to into an Escrow entry reverts with NonHolderCannotMint.
-  it.skip("GovernorWhitelist — integration test requires governor + delta-mint on-chain", async () => {
-    // TODO: spin up governor + delta-mint on localnet, then exercise the
-    // full init_sy_params → governor.add_participant_via_pool → delta-mint
-    // add_escrow_with_co_authority chain.
+  // Full-integration GovernorWhitelist e2e — exercises the real CPI chain:
+  //   kamino_sy_adapter.init_sy_params(KycMode::GovernorWhitelist, ...)
+  //     → governor.add_participant_via_pool(role: Escrow)
+  //       → delta_mint.add_escrow_with_co_authority
+  //         → creates WhitelistEntry PDA with role = Escrow
+  //
+  // Anchor.toml clones the devnet-deployed governor + delta_mint into the
+  // local test validator on first run (see [[test.validator.clone]]), and
+  // target/idl/{governor,delta_mint}.json are vendored for Anchor to build
+  // typed method calls.
+  it("GovernorWhitelist — creates Escrow-role WhitelistEntry via governor CPI", async () => {
+    const kyc = loadKycStack(provider);
+
+    // --- 1. Create a stand-in "underlying" SPL mint (tUSDY analog) ---
+    const underlyingMint = await createBaseMint(provider.connection, payer, 6);
+
+    // --- 2. Init + activate a governor KYC pool for that underlying ---
+    const pool = await initAndActivateKycPool({
+      stack: kyc,
+      connection: provider.connection,
+      payerAndAuthority: payer,
+      underlyingMint,
+      decimals: 6,
+    });
+
+    // --- 3. Init a mock klend reserve on the governor-issued d-token ---
+    // (Governor's initialize_pool created `pool.wrappedMint` — that's our
+    // dUSDY-style d-token. The Kamino SY adapter wraps a reserve over it.)
+    const reserve = await initMockKlendReserve({
+      program: klend,
+      payer,
+      liquidityMint: pool.wrappedMint,
+    });
+
+    // --- 4. Derive the WhitelistEntry PDA for a test escrow pubkey ---
+    const escrowPda = Keypair.generate().publicKey;
+    const [whitelistEntry] = findWhitelistEntry(pool.dmMintConfig, escrowPda);
+
+    // --- 5. init_sy_params(GovernorWhitelist) — should create the entry via CPI ---
+    await initKaminoSyMarketGovernorWhitelist({
+      adapter,
+      klend,
+      payer,
+      curator: pool.authority, // must be governor pool.authority
+      underlyingMint: pool.wrappedMint,
+      klendReserve: reserve,
+      governorProgram: GOVERNOR_PROGRAM_ID,
+      poolConfig: pool.poolConfig,
+      dmMintConfig: pool.dmMintConfig,
+      deltaMintProgram: DELTA_MINT_PROGRAM_ID,
+      pdasToWhitelist: [{ pda: escrowPda, whitelistEntry }],
+    });
+
+    // --- 6. Assert the WhitelistEntry landed with role = Escrow ---
+    const entry = await fetchWhitelistEntry(kyc, whitelistEntry);
+    assert.isNotNull(entry, "WhitelistEntry PDA must be created by the governor CPI");
+    assert.equal(
+      entry!.wallet.toString(),
+      escrowPda.toString(),
+      "entry.wallet must match the whitelisted PDA"
+    );
+    assert.equal(
+      entry!.mintConfig.toString(),
+      pool.dmMintConfig.toString(),
+      "entry.mint_config must match the governor's dm_mint_config"
+    );
+    assert.isTrue(entry!.approved, "entry.approved must be true");
+    assert.ok(
+      "escrow" in entry!.role,
+      `entry.role must be Escrow — got ${JSON.stringify(entry!.role)}`
+    );
   });
 
   it("GovernorWhitelist with mismatched governor account rejects", async () => {
