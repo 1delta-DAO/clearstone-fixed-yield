@@ -169,6 +169,73 @@ concerns worth separate attention:
    it'd match — astronomically unlikely but worth noting as a cryptographic
    assumption.
 
+## v2 addition — roll-delegation (permissionless keeper crank)
+
+Shipped alongside the core + adapters; **in scope** for this audit.
+
+### Files in scope
+
+- [periphery/clearstone_curator/src/roll_delegation.rs](periphery/clearstone_curator/src/roll_delegation.rs)
+  — state + helpers. 26 unit tests (`cargo test -p clearstone_curator
+  roll_delegation`) cover validate_delegation, hash_allocations,
+  slippage_floor, and the commit-bytes layout.
+- [periphery/clearstone_curator/src/lib.rs](periphery/clearstone_curator/src/lib.rs)
+  — `CrankRollDelegated<'info>` + `crank_roll_delegated` handler.
+  Spans ~270 LOC of inlined CPI composition. Intentional duplication
+  vs. the curator-signed `reallocate_{from,to}_market` paths; extraction
+  tracked in `FOLLOWUPS.md :: CURATOR_REALLOCATE_DEDUP`.
+
+### What auditors must verify
+
+1. **I-D1 through I-D7** in [INVARIANTS.md § Roll-delegation](INVARIANTS.md).
+   Each lists the enforcement site + test coverage + residual risk.
+2. **`validate_delegation` short-circuit ordering** — vault-mismatch
+   must fire before hash-mismatch, so a user whose delegation was
+   written against vault A and is being cranked against vault B sees
+   `VaultMismatch`, not `AllocationsDrifted`. Confirmed in the Rust
+   tests at `validate_delegation_rejects_vault_mismatch_before_hash_check`.
+3. **`hash_allocations` collision resistance** — the commit-bytes layout
+   (32 market + 2 weight_bps + 8 cap_base = 42 bytes) is the only data
+   that feeds the hash. Verify no adversarial allocation pair produces
+   a collision: the tests assert changing any of the three committed
+   fields changes the hash. `deployed_base` is deliberately excluded.
+4. **Slippage-floor math parity** — the Rust `slippage_floor` helper
+   and the TypeScript SDK's `slippageFloor` must return bit-identical
+   values for the same inputs (I-D6 enforcement depends on it). Both
+   have dedicated test suites running against shared vectors.
+5. **Atomicity** — six CPIs in `crank_roll_delegated`. Verify the
+   failure path of each (withdraw_liquidity revert, trade_pt revert,
+   etc.) unwinds cleanly. Specific attention to step-by-step
+   `reload()` ordering: SY/PT/LP account amounts between CPI hops.
+6. **`init_if_needed` rent griefing** — keeper pays for the TO-side
+   PT/LP vault ATAs the first time a roll lands in a market. Confirm
+   there's no way a malicious curator can griefingly add allocations
+   pointing at junk markets and drain keeper rent.
+
+### Threat model (roll-delegation specific)
+
+| Attack | Mitigation | Where tested |
+|---|---|---|
+| Keeper rolls early for cheap PT | `from_market.expiration_ts <= clock.unix_timestamp` check (I-D5) | integration (deferred) |
+| Keeper sandwiches AMM leg | User-signed `max_slippage_bps` bounds keeper `min_base_out`; post-CPI check on `base_escrow` delta (I-D6) | `validate_delegation_happy_path` + `slippage_floor_*` |
+| Curator changes allocations after user signed | `validate_delegation` recomputes + compares `allocations_hash` (I-D4) | `validate_delegation_rejects_allocations_drift_{added_entry,removed_entry,weight_change}` |
+| User-signed delegation replayed post-revoke | Delegation PDA closed at revoke; subsequent crank fails at account-load | integration (deferred) |
+| Keeper abuses idempotent re-crank to drain | `deployed_base == 0` reverts with `NothingToRoll`; `vault_lp_ata.amount >= deployed_base` cross-check reverts with `DeployedBaseDrift` | (integration-deferred; inline requires; live test in Pass E integration) |
+| Compromised curator key swaps to hostile allocation | Out of scope — I-D4 invalidates all existing delegations at that moment, so the damage is limited to users who re-sign without noticing. `CURATOR_SPLIT_AUTHORITY` follow-up narrows this further. | n/a |
+| Timing attack on ttl bounds (`<` vs `≤`) | `validate_delegation_rejects_at_exact_expiry_slot` asserts strict `<` | Rust tests |
+
+### Known deviations from the locked spec
+
+- **Inline CPI composition** instead of `reallocate_{from,to}_inner`
+  extraction (Pass B ship decision). `FOLLOWUPS.md :: CURATOR_REALLOCATE_DEDUP`.
+  Audit approach: review the new handler as if it were a separate
+  program that happens to share the same CPI shape.
+- **`pt_intent = 0` in the to-leg.** Means delegated rolls park base
+  entirely as SY-sided liquidity, not matching the curator's
+  allocation weights. `CURATOR_ROLL_DELEGATION_V1_1` open.
+- **No keeper tip yet.** v1 cranks are gas-neutral or loss-making for
+  the keeper. Tip model in v1.1 per spec §8.
+
 ## Known open items
 
 Summary — full detail in [FOLLOWUPS.md](FOLLOWUPS.md).

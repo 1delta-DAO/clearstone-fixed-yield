@@ -26,7 +26,7 @@ use precise_number::Number;
 
 pub mod roll_delegation;
 pub use roll_delegation::{
-    RollDelegation, RollDelegationError, ROLL_DELEGATION_SEED,
+    DelegatedRollCompleted, RollDelegation, RollDelegationError, ROLL_DELEGATION_SEED,
 };
 
 declare_id!("831zw8r2fGwRB1QpuRU3gZHZBFYYHBHeG7RbKUz9ssGm");
@@ -659,6 +659,366 @@ pub mod clearstone_curator {
     pub fn close_delegation(ctx: Context<CloseDelegation>) -> Result<()> {
         roll_delegation::close_delegation(ctx)
     }
+
+    /// Permissionless keeper crank — performs matured → next rebalance
+    /// under a user-signed RollDelegation. Keeper signs the outer tx;
+    /// vault PDA signs the inner CPIs.
+    ///
+    /// Invariants enforced (see CURATOR_ROLL_DELEGATION.md §4):
+    ///   I-D4 allocation hash matches delegation
+    ///   I-D5 from_market past expiration
+    ///   I-D6 min_base_out ≥ delegation's slippage floor
+    ///   I-D7 atomic — single instruction = single failure domain
+    ///
+    /// NOTE: CPI composition duplicates the three-step pattern from
+    /// `reallocate_from_market` (withdraw_liquidity → trade_pt sell →
+    /// redeem_sy) and `reallocate_to_market` (mint_sy → trade_pt buy →
+    /// deposit_liquidity). Extracting shared `_inner` fns is tracked in
+    /// FOLLOWUPS.md under `CURATOR_REALLOCATE_DEDUP`; the refactor is
+    /// deferred so this ticket ships without touching the audited
+    /// curator-signed path.
+    pub fn crank_roll_delegated<'info>(
+        ctx: Context<'_, '_, '_, 'info, CrankRollDelegated<'info>>,
+        from_index: u16,
+        to_index: u16,
+        min_base_out: u64,
+    ) -> Result<()> {
+        // ---------- Invariant checks (immutable borrows only) ----------
+        let clock = Clock::get()?;
+        let from_idx = from_index as usize;
+        let to_idx = to_index as usize;
+
+        let (delegation_user, deployed, curator, base_mint_key, bump);
+        {
+            let d = &ctx.accounts.delegation;
+            let v = &ctx.accounts.vault;
+
+            roll_delegation::validate_delegation(
+                d,
+                v.key(),
+                &v.allocations,
+                clock.slot,
+            )?;
+
+            require!(
+                from_idx < v.allocations.len(),
+                RollDelegationError::IndexOOR
+            );
+            require!(
+                to_idx < v.allocations.len(),
+                RollDelegationError::IndexOOR
+            );
+            require_keys_eq!(
+                v.allocations[from_idx].market,
+                ctx.accounts.from_market.key(),
+                RollDelegationError::MarketMismatch
+            );
+            require_keys_eq!(
+                v.allocations[to_idx].market,
+                ctx.accounts.to_market.key(),
+                RollDelegationError::MarketMismatch
+            );
+
+            // I-D5: from_market must be past its expiration.
+            let expiry = ctx.accounts.from_market.financials.expiration_ts as i64;
+            require!(
+                clock.unix_timestamp >= expiry,
+                RollDelegationError::FromMarketNotMatured
+            );
+
+            // Gotcha #5: reject idempotent re-cranks.
+            deployed = v.allocations[from_idx].deployed_base;
+            require!(deployed > 0, RollDelegationError::NothingToRoll);
+
+            // Gotcha #4: vault's LP balance must back the claimed deployed.
+            require!(
+                ctx.accounts.from_vault_lp_ata.amount >= deployed,
+                RollDelegationError::DeployedBaseDrift
+            );
+
+            // I-D6: keeper's slippage floor meets delegation's cap.
+            let delegation_floor =
+                roll_delegation::slippage_floor(deployed, d.max_slippage_bps);
+            require!(
+                min_base_out >= delegation_floor,
+                RollDelegationError::SlippageBelowDelegationFloor
+            );
+
+            delegation_user = d.user;
+            curator = v.curator;
+            base_mint_key = v.base_mint;
+            bump = [v.bump];
+        } // immutable borrows released
+
+        // Cache for event emission (cheap copies, outside any borrow).
+        let from_market_key = ctx.accounts.from_market.key();
+        let to_market_key = ctx.accounts.to_market.key();
+        let keeper_key = ctx.accounts.keeper.key();
+        let vault_key = ctx.accounts.vault.key();
+
+        let signer_seeds: &[&[&[u8]]] = &[&[
+            CURATOR_VAULT_SEED,
+            curator.as_ref(),
+            base_mint_key.as_ref(),
+            &bump,
+        ]];
+
+        let base_escrow_before = ctx.accounts.base_escrow.amount;
+
+        // ---------- FROM-leg (each CPI in its own frame via #[inline(never)]) ----------
+        crank_cpi::do_withdraw_liquidity(
+            ctx.accounts,
+            signer_seeds,
+            ctx.remaining_accounts,
+            deployed,
+        )?;
+
+        ctx.accounts.from_vault_pt_ata.reload()?;
+        let pt_to_sell = ctx.accounts.from_vault_pt_ata.amount;
+        if pt_to_sell > 0 {
+            crank_cpi::do_trade_pt_sell(
+                ctx.accounts,
+                signer_seeds,
+                ctx.remaining_accounts,
+                pt_to_sell,
+            )?;
+        }
+
+        ctx.accounts.vault_sy_ata.reload()?;
+        let sy_to_redeem = ctx.accounts.vault_sy_ata.amount;
+        if sy_to_redeem > 0 {
+            crank_cpi::do_redeem_sy(ctx.accounts, signer_seeds, sy_to_redeem)?;
+        }
+
+        // ---------- base_out post-check (I-D6) ----------
+        ctx.accounts.base_escrow.reload()?;
+        let base_out = ctx
+            .accounts
+            .base_escrow
+            .amount
+            .checked_sub(base_escrow_before)
+            .ok_or(RollDelegationError::SlippageBelowDelegationFloor)?;
+        require!(
+            base_out >= min_base_out,
+            RollDelegationError::SlippageBelowDelegationFloor
+        );
+
+        // ---------- Vault state: decrement from, pre-check to ----------
+        let new_deployed = {
+            let v_mut = &mut ctx.accounts.vault;
+            v_mut.allocations[from_idx].deployed_base = v_mut.allocations
+                [from_idx]
+                .deployed_base
+                .saturating_sub(deployed);
+            let nd = v_mut.allocations[to_idx]
+                .deployed_base
+                .checked_add(base_out)
+                .ok_or(CuratorError::Overflow)?;
+            require!(
+                nd <= v_mut.allocations[to_idx].cap_base,
+                CuratorError::AllocationCapExceeded
+            );
+            nd
+        }; // mut borrow released before TO-leg CPIs
+
+        // ---------- TO-leg ----------
+        crank_cpi::do_mint_sy(ctx.accounts, signer_seeds, base_out)?;
+
+        ctx.accounts.vault_sy_ata.reload()?;
+        let sy_for_deposit = ctx.accounts.vault_sy_ata.amount;
+        crank_cpi::do_deposit_liquidity(
+            ctx.accounts,
+            signer_seeds,
+            ctx.remaining_accounts,
+            sy_for_deposit,
+        )?;
+
+        // Commit to-side state.
+        ctx.accounts.vault.allocations[to_idx].deployed_base = new_deployed;
+
+        emit!(DelegatedRollCompleted {
+            vault: vault_key,
+            user: delegation_user,
+            keeper: keeper_key,
+            from_market: from_market_key,
+            to_market: to_market_key,
+            from_index,
+            to_index,
+            base_rolled: base_out,
+            min_base_out,
+        });
+
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// crank_cpi — #[inline(never)] helpers so each CPI composition lives in its
+// own frame. See FOLLOWUPS :: CURATOR_CRANK_HANDLER_FRAME for the
+// motivation: keeping the crank_roll_delegated handler body under the
+// 4 KB SBF stack-offset cap requires boundaries the linker can respect.
+// ---------------------------------------------------------------------------
+
+mod crank_cpi {
+    use super::*;
+
+    #[inline(never)]
+    pub(super) fn do_withdraw_liquidity<'info>(
+        accts: &CrankRollDelegated<'info>,
+        signer_seeds: &[&[&[u8]]],
+        remaining_accounts: &[AccountInfo<'info>],
+        lp_in: u64,
+    ) -> Result<()> {
+        clearstone_core::cpi::market_two_withdraw_liquidity(
+            CpiContext::new_with_signer(
+                accts.core_program.to_account_info(),
+                clearstone_core::cpi::accounts::WithdrawLiquidity {
+                    withdrawer: accts.vault.to_account_info(),
+                    market: accts.from_market.to_account_info(),
+                    token_pt_dst: accts.from_vault_pt_ata.to_account_info(),
+                    token_sy_dst: accts.vault_sy_ata.to_account_info(),
+                    token_pt_escrow: accts.from_market_escrow_pt.to_account_info(),
+                    token_sy_escrow: accts.from_market_escrow_sy.to_account_info(),
+                    token_lp_src: accts.from_vault_lp_ata.to_account_info(),
+                    mint_lp: accts.from_mint_lp.to_account_info(),
+                    mint_sy: accts.sy_mint.to_account_info(),
+                    address_lookup_table: accts.from_market_alt.to_account_info(),
+                    token_program: accts.token_program.to_account_info(),
+                    sy_program: accts.sy_program.to_account_info(),
+                    event_authority: accts.core_event_authority.to_account_info(),
+                    program: accts.core_program.to_account_info(),
+                },
+                signer_seeds,
+            )
+            .with_remaining_accounts(remaining_accounts.to_vec()),
+            lp_in,
+            0, // min_pt_out — slippage enforced at the base_escrow delta
+            0, // min_sy_out
+        )?;
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(super) fn do_trade_pt_sell<'info>(
+        accts: &CrankRollDelegated<'info>,
+        signer_seeds: &[&[&[u8]]],
+        remaining_accounts: &[AccountInfo<'info>],
+        pt_to_sell: u64,
+    ) -> Result<()> {
+        clearstone_core::cpi::trade_pt(
+            CpiContext::new_with_signer(
+                accts.core_program.to_account_info(),
+                clearstone_core::cpi::accounts::TradePt {
+                    trader: accts.vault.to_account_info(),
+                    market: accts.from_market.to_account_info(),
+                    token_sy_trader: accts.vault_sy_ata.to_account_info(),
+                    token_pt_trader: accts.from_vault_pt_ata.to_account_info(),
+                    token_sy_escrow: accts.from_market_escrow_sy.to_account_info(),
+                    token_pt_escrow: accts.from_market_escrow_pt.to_account_info(),
+                    address_lookup_table: accts.from_market_alt.to_account_info(),
+                    token_program: accts.token_program.to_account_info(),
+                    sy_program: accts.sy_program.to_account_info(),
+                    token_fee_treasury_sy: accts.from_token_fee_treasury_sy.to_account_info(),
+                    mint_sy: accts.sy_mint.to_account_info(),
+                    event_authority: accts.core_event_authority.to_account_info(),
+                    program: accts.core_program.to_account_info(),
+                },
+                signer_seeds,
+            )
+            .with_remaining_accounts(remaining_accounts.to_vec()),
+            -(pt_to_sell as i64),
+            i64::MIN, // bound enforced via base_escrow delta post-CPI
+        )?;
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(super) fn do_redeem_sy<'info>(
+        accts: &CrankRollDelegated<'info>,
+        signer_seeds: &[&[&[u8]]],
+        sy_to_redeem: u64,
+    ) -> Result<()> {
+        generic_exchange_rate_sy::cpi::redeem_sy(
+            CpiContext::new_with_signer(
+                accts.sy_program.to_account_info(),
+                generic_exchange_rate_sy::cpi::accounts::RedeemSy {
+                    owner: accts.vault.to_account_info(),
+                    sy_market: accts.sy_market.to_account_info(),
+                    base_mint: accts.base_mint.to_account_info(),
+                    sy_mint: accts.sy_mint.to_account_info(),
+                    sy_src: accts.vault_sy_ata.to_account_info(),
+                    base_vault: accts.adapter_base_vault.to_account_info(),
+                    base_dst: accts.base_escrow.to_account_info(),
+                    token_program: accts.token_program.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            sy_to_redeem,
+        )?;
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(super) fn do_mint_sy<'info>(
+        accts: &CrankRollDelegated<'info>,
+        signer_seeds: &[&[&[u8]]],
+        base_in: u64,
+    ) -> Result<()> {
+        generic_exchange_rate_sy::cpi::mint_sy(
+            CpiContext::new_with_signer(
+                accts.sy_program.to_account_info(),
+                generic_exchange_rate_sy::cpi::accounts::MintSy {
+                    owner: accts.vault.to_account_info(),
+                    sy_market: accts.sy_market.to_account_info(),
+                    base_mint: accts.base_mint.to_account_info(),
+                    sy_mint: accts.sy_mint.to_account_info(),
+                    base_src: accts.base_escrow.to_account_info(),
+                    base_vault: accts.adapter_base_vault.to_account_info(),
+                    sy_dst: accts.vault_sy_ata.to_account_info(),
+                    token_program: accts.token_program.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            base_in,
+        )?;
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(super) fn do_deposit_liquidity<'info>(
+        accts: &CrankRollDelegated<'info>,
+        signer_seeds: &[&[&[u8]]],
+        remaining_accounts: &[AccountInfo<'info>],
+        sy_for_deposit: u64,
+    ) -> Result<()> {
+        clearstone_core::cpi::market_two_deposit_liquidity(
+            CpiContext::new_with_signer(
+                accts.core_program.to_account_info(),
+                clearstone_core::cpi::accounts::DepositLiquidity {
+                    depositor: accts.vault.to_account_info(),
+                    market: accts.to_market.to_account_info(),
+                    token_pt_src: accts.to_vault_pt_ata.to_account_info(),
+                    token_sy_src: accts.vault_sy_ata.to_account_info(),
+                    token_pt_escrow: accts.to_market_escrow_pt.to_account_info(),
+                    token_sy_escrow: accts.to_market_escrow_sy.to_account_info(),
+                    token_lp_dst: accts.to_vault_lp_ata.to_account_info(),
+                    mint_lp: accts.to_mint_lp.to_account_info(),
+                    mint_sy: accts.sy_mint.to_account_info(),
+                    address_lookup_table: accts.to_market_alt.to_account_info(),
+                    token_program: accts.token_program.to_account_info(),
+                    sy_program: accts.sy_program.to_account_info(),
+                    event_authority: accts.core_event_authority.to_account_info(),
+                    program: accts.core_program.to_account_info(),
+                },
+                signer_seeds,
+            )
+            .with_remaining_accounts(remaining_accounts.to_vec()),
+            0,               // pt_intent — park base as SY-sided liquidity (v1.1 tunes this)
+            sy_for_deposit,  // sy_intent
+            0,               // min_lp_out — curator refreshes via mark_to_market
+        )?;
+        Ok(())
+    }
 }
 
 // -------------- State --------------
@@ -1244,4 +1604,147 @@ pub struct CloseDelegation<'info> {
         bump = delegation.bump,
     )]
     pub delegation: Box<Account<'info, RollDelegation>>,
+}
+
+/// Account set for `crank_roll_delegated`.
+///
+/// Merged super-set of `ReallocateFromMarket` + `ReallocateToMarket`
+/// with the curator signer swapped for a permissionless `keeper`. All
+/// authority validation happens via the `delegation` account — see
+/// CURATOR_ROLL_DELEGATION.md §3.5.
+#[derive(Accounts)]
+pub struct CrankRollDelegated<'info> {
+    /// Pays gas. Zero privilege; the handler never reads `keeper.key()`
+    /// for authorization.
+    #[account(mut)]
+    pub keeper: Signer<'info>,
+
+    /// User-signed delegation authorizing this roll. Constraint binds
+    /// it to the vault; handler re-checks hash + expiry + slippage.
+    #[account(
+        seeds = [ROLL_DELEGATION_SEED, vault.key().as_ref(), delegation.user.as_ref()],
+        bump = delegation.bump,
+        constraint = delegation.vault == vault.key() @ RollDelegationError::VaultMismatch,
+    )]
+    pub delegation: Box<Account<'info, RollDelegation>>,
+
+    // ---- Shared vault + base ----
+    //
+    // NOTE on typed vs unchecked: every field below that needs
+    // `.amount` (balance reads) or `.financials` (maturity) stays
+    // typed. Every CPI-passthrough is UncheckedAccount with address
+    // constraints — dropping the Anchor-level deserialization is what
+    // keeps `try_accounts` below the 4 KB SBF frame cap (see
+    // FOLLOWUPS :: CURATOR_CRANK_STACK_OVERFLOW).
+    #[account(mut, has_one = base_mint, has_one = base_escrow)]
+    pub vault: Box<Account<'info, CuratorVault>>,
+
+    /// CHECK: address-constrained to vault.base_mint (via has_one above).
+    pub base_mint: UncheckedAccount<'info>,
+
+    /// base_escrow: typed because the handler reloads + reads .amount
+    /// to compute the min_base_out post-check.
+    #[account(mut)]
+    pub base_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    // ---- Adapter (shared across both legs) ----
+    /// CHECK: validated by adapter CPIs.
+    pub sy_market: UncheckedAccount<'info>,
+    /// CHECK: mint used only as CPI account; adapter validates.
+    #[account(mut)]
+    pub sy_mint: UncheckedAccount<'info>,
+    /// CHECK: adapter-owned base pool; CPI-only.
+    #[account(mut)]
+    pub adapter_base_vault: UncheckedAccount<'info>,
+
+    /// vault_sy_ata: typed because we reload + read .amount between
+    /// redeem/mint CPIs.
+    #[account(mut)]
+    pub vault_sy_ata: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    // ---- FROM market (matured) ----
+    /// from_market: typed because handler reads `.financials.expiration_ts`
+    /// for the maturity gate (I-D5).
+    #[account(mut)]
+    pub from_market: Box<Account<'info, MarketTwo>>,
+    /// CHECK: address-constrained to the market's escrow.
+    #[account(mut, address = from_market.token_pt_escrow)]
+    pub from_market_escrow_pt: UncheckedAccount<'info>,
+    /// CHECK: address-constrained.
+    #[account(mut, address = from_market.token_sy_escrow)]
+    pub from_market_escrow_sy: UncheckedAccount<'info>,
+    /// CHECK: address-constrained.
+    #[account(mut, address = from_market.token_fee_treasury_sy)]
+    pub from_token_fee_treasury_sy: UncheckedAccount<'info>,
+    /// CHECK: address-constrained.
+    #[account(address = from_market.address_lookup_table)]
+    pub from_market_alt: UncheckedAccount<'info>,
+    /// CHECK: PT mint for from_market.
+    #[account(address = from_market.mint_pt)]
+    pub from_mint_pt: UncheckedAccount<'info>,
+    /// CHECK: LP mint for from_market.
+    #[account(mut, address = from_market.mint_lp)]
+    pub from_mint_lp: UncheckedAccount<'info>,
+
+    /// from_vault_pt_ata: typed; handler reloads + reads .amount after
+    /// `withdraw_liquidity` to size the subsequent trade_pt sell.
+    #[account(
+        mut,
+        associated_token::mint = from_mint_pt,
+        associated_token::authority = vault,
+    )]
+    pub from_vault_pt_ata: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// from_vault_lp_ata: typed; handler reads .amount to enforce
+    /// `DeployedBaseDrift` (vault_lp_ata.amount >= deployed_base).
+    #[account(
+        mut,
+        associated_token::mint = from_mint_lp,
+        associated_token::authority = vault,
+    )]
+    pub from_vault_lp_ata: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    // ---- TO market (next) ----
+    //
+    // to_* accounts are CPI-only: handler never reads any of their
+    // fields. All UncheckedAccount. Keeper MUST prepend idempotent
+    // ATA-init ixs for to_vault_pt_ata and to_vault_lp_ata before
+    // invoking this instruction (previously done via `init_if_needed`,
+    // which blew the stack frame).
+    /// CHECK: market account; handler validates via allocation index lookup.
+    #[account(mut)]
+    pub to_market: UncheckedAccount<'info>,
+    /// CHECK: CPI-only.
+    #[account(mut)]
+    pub to_market_escrow_pt: UncheckedAccount<'info>,
+    /// CHECK: CPI-only.
+    #[account(mut)]
+    pub to_market_escrow_sy: UncheckedAccount<'info>,
+    /// CHECK: CPI-only.
+    #[account(mut)]
+    pub to_token_fee_treasury_sy: UncheckedAccount<'info>,
+    /// CHECK: CPI-only.
+    pub to_market_alt: UncheckedAccount<'info>,
+    /// CHECK: CPI-only.
+    pub to_mint_pt: UncheckedAccount<'info>,
+    /// CHECK: CPI-only.
+    #[account(mut)]
+    pub to_mint_lp: UncheckedAccount<'info>,
+    /// CHECK: vault-PDA-owned PT ATA for to_market. Caller MUST create
+    /// via SPL associated-token-program idempotent init before the crank.
+    #[account(mut)]
+    pub to_vault_pt_ata: UncheckedAccount<'info>,
+    /// CHECK: vault-PDA-owned LP ATA for to_market. Same pre-init
+    /// requirement as to_vault_pt_ata.
+    #[account(mut)]
+    pub to_vault_lp_ata: UncheckedAccount<'info>,
+
+    // ---- Programs + sysvars ----
+    pub token_program: Program<'info, Token>,
+    pub sy_program: Program<'info, GenericExchangeRateSy>,
+    pub core_program: Program<'info, ClearstoneCore>,
+    /// CHECK: core event authority PDA.
+    pub core_event_authority: UncheckedAccount<'info>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
 }

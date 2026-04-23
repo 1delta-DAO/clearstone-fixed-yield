@@ -14,6 +14,277 @@ export type ClearstoneCurator = {
   },
   "instructions": [
     {
+      "name": "closeDelegation",
+      "discriminator": [
+        41,
+        110,
+        46,
+        165,
+        0,
+        109,
+        193,
+        193
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "delegation",
+          "writable": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "crankRollDelegated",
+      "docs": [
+        "Permissionless keeper crank — performs matured → next rebalance",
+        "under a user-signed RollDelegation. Keeper signs the outer tx;",
+        "vault PDA signs the inner CPIs.",
+        "",
+        "Invariants enforced (see CURATOR_ROLL_DELEGATION.md §4):",
+        "I-D4 allocation hash matches delegation",
+        "I-D5 from_market past expiration",
+        "I-D6 min_base_out ≥ delegation's slippage floor",
+        "I-D7 atomic — single instruction = single failure domain",
+        "",
+        "NOTE: CPI composition duplicates the three-step pattern from",
+        "`reallocate_from_market` (withdraw_liquidity → trade_pt sell →",
+        "redeem_sy) and `reallocate_to_market` (mint_sy → trade_pt buy →",
+        "deposit_liquidity). Extracting shared `_inner` fns is tracked in",
+        "FOLLOWUPS.md under `CURATOR_REALLOCATE_DEDUP`; the refactor is",
+        "deferred so this ticket ships without touching the audited",
+        "curator-signed path."
+      ],
+      "discriminator": [
+        58,
+        80,
+        60,
+        46,
+        104,
+        49,
+        78,
+        112
+      ],
+      "accounts": [
+        {
+          "name": "keeper",
+          "docs": [
+            "Pays gas. Zero privilege; the handler never reads `keeper.key()`",
+            "for authorization."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "delegation",
+          "docs": [
+            "User-signed delegation authorizing this roll. Constraint binds",
+            "it to the vault; handler re-checks hash + expiry + slippage."
+          ]
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "baseMint"
+        },
+        {
+          "name": "baseEscrow",
+          "docs": [
+            "base_escrow: typed because the handler reloads + reads .amount",
+            "to compute the min_base_out post-check."
+          ],
+          "writable": true
+        },
+        {
+          "name": "syMarket"
+        },
+        {
+          "name": "syMint",
+          "writable": true
+        },
+        {
+          "name": "adapterBaseVault",
+          "writable": true
+        },
+        {
+          "name": "vaultSyAta",
+          "docs": [
+            "vault_sy_ata: typed because we reload + read .amount between",
+            "redeem/mint CPIs."
+          ],
+          "writable": true
+        },
+        {
+          "name": "fromMarket",
+          "docs": [
+            "from_market: typed because handler reads `.financials.expiration_ts`",
+            "for the maturity gate (I-D5)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "fromMarketEscrowPt",
+          "writable": true
+        },
+        {
+          "name": "fromMarketEscrowSy",
+          "writable": true
+        },
+        {
+          "name": "fromTokenFeeTreasurySy",
+          "writable": true
+        },
+        {
+          "name": "fromMarketAlt"
+        },
+        {
+          "name": "fromMintPt"
+        },
+        {
+          "name": "fromMintLp",
+          "writable": true
+        },
+        {
+          "name": "fromVaultPtAta",
+          "docs": [
+            "from_vault_pt_ata: typed; handler reloads + reads .amount after",
+            "`withdraw_liquidity` to size the subsequent trade_pt sell."
+          ],
+          "writable": true
+        },
+        {
+          "name": "fromVaultLpAta",
+          "docs": [
+            "from_vault_lp_ata: typed; handler reads .amount to enforce",
+            "`DeployedBaseDrift` (vault_lp_ata.amount >= deployed_base)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "toMarket",
+          "writable": true
+        },
+        {
+          "name": "toMarketEscrowPt",
+          "writable": true
+        },
+        {
+          "name": "toMarketEscrowSy",
+          "writable": true
+        },
+        {
+          "name": "toTokenFeeTreasurySy",
+          "writable": true
+        },
+        {
+          "name": "toMarketAlt"
+        },
+        {
+          "name": "toMintPt"
+        },
+        {
+          "name": "toMintLp",
+          "writable": true
+        },
+        {
+          "name": "toVaultPtAta",
+          "docs": [
+            "via SPL associated-token-program idempotent init before the crank."
+          ],
+          "writable": true
+        },
+        {
+          "name": "toVaultLpAta",
+          "docs": [
+            "requirement as to_vault_pt_ata."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram"
+        },
+        {
+          "name": "syProgram"
+        },
+        {
+          "name": "coreProgram"
+        },
+        {
+          "name": "coreEventAuthority"
+        },
+        {
+          "name": "associatedTokenProgram"
+        },
+        {
+          "name": "systemProgram"
+        }
+      ],
+      "args": [
+        {
+          "name": "fromIndex",
+          "type": "u16"
+        },
+        {
+          "name": "toIndex",
+          "type": "u16"
+        },
+        {
+          "name": "minBaseOut",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "createDelegation",
+      "discriminator": [
+        177,
+        165,
+        93,
+        55,
+        227,
+        163,
+        61,
+        175
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "docs": [
+            "The vault this delegation authorizes rolls for. Read-only — the",
+            "handler just reads `allocations` for the commitment."
+          ]
+        },
+        {
+          "name": "delegation",
+          "writable": true
+        },
+        {
+          "name": "systemProgram"
+        }
+      ],
+      "args": [
+        {
+          "name": "maxSlippageBps",
+          "type": "u16"
+        },
+        {
+          "name": "ttlSlots",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "deposit",
       "docs": [
         "User deposits `amount_base`, receives shares. Pro-rata against",
@@ -710,6 +981,19 @@ export type ClearstoneCurator = {
       ]
     },
     {
+      "name": "rollDelegation",
+      "discriminator": [
+        138,
+        158,
+        170,
+        187,
+        76,
+        104,
+        230,
+        238
+      ]
+    },
+    {
       "name": "userPosition",
       "discriminator": [
         251,
@@ -748,6 +1032,45 @@ export type ClearstoneCurator = {
         62,
         151,
         230
+      ]
+    },
+    {
+      "name": "delegatedRollCompleted",
+      "discriminator": [
+        132,
+        205,
+        244,
+        26,
+        104,
+        40,
+        237,
+        162
+      ]
+    },
+    {
+      "name": "delegationClosed",
+      "discriminator": [
+        225,
+        66,
+        187,
+        107,
+        192,
+        71,
+        85,
+        138
+      ]
+    },
+    {
+      "name": "delegationCreated",
+      "discriminator": [
+        20,
+        93,
+        12,
+        34,
+        227,
+        63,
+        100,
+        136
       ]
     },
     {
@@ -1150,6 +1473,99 @@ export type ClearstoneCurator = {
               "reallocate_to_market / reallocate_from_market."
             ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "delegatedRollCompleted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "keeper",
+            "type": "pubkey"
+          },
+          {
+            "name": "fromMarket",
+            "type": "pubkey"
+          },
+          {
+            "name": "toMarket",
+            "type": "pubkey"
+          },
+          {
+            "name": "fromIndex",
+            "type": "u16"
+          },
+          {
+            "name": "toIndex",
+            "type": "u16"
+          },
+          {
+            "name": "baseRolled",
+            "type": "u64"
+          },
+          {
+            "name": "minBaseOut",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "delegationClosed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "user",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "delegationCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "maxSlippageBps",
+            "type": "u16"
+          },
+          {
+            "name": "expiresAtSlot",
+            "type": "u64"
+          },
+          {
+            "name": "allocationsHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
           }
         ]
       }
@@ -1571,6 +1987,22 @@ export type ClearstoneCurator = {
                 1
               ]
             }
+          },
+          {
+            "name": "flashPtDebt",
+            "docs": [
+              "Pending PT owed back to this market by an in-flight `flash_swap_pt`.",
+              "Zero at rest. Non-zero means: (a) a flash callback is currently",
+              "executing and (b) no other `flash_swap_pt` may enter (blocks nested",
+              "flash reentry). See INTENT_FLASH_PLAN.md §5.3 and I-F1 in",
+              "INVARIANTS.md.",
+              "",
+              "Appended at the end of the struct so existing markets' layouts are",
+              "not disturbed — the realloc_market ix grows them to include this",
+              "field on-demand. Markets without the appended bytes must not call",
+              "`flash_swap_pt` (guarded at handler entry)."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -1644,6 +2076,70 @@ export type ClearstoneCurator = {
           {
             "name": "deployedBase",
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "rollDelegation",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "docs": [
+              "The curator vault this delegation authorizes rolls for."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "user",
+            "docs": [
+              "The user wallet that signed the delegation."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "maxSlippageBps",
+            "docs": [
+              "Ceiling on per-roll slippage, in bps of notional."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "expiresAtSlot",
+            "docs": [
+              "Expiry slot; once `Clock::slot >= this`, the delegation is dead."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "allocationsHash",
+            "docs": [
+              "Commitment over the curator's allocation whitelist at signing",
+              "time. If the curator changes allocations, this hash drifts and",
+              "the delegation becomes unusable until the user re-signs."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "createdAtSlot",
+            "docs": [
+              "Slot at creation — audit / stale-position detection."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
           }
         ]
       }

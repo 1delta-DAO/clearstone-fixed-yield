@@ -20,6 +20,7 @@ import { BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 
 import type { SolverClients } from "./clients.js";
+import type { FusionOrderConfig } from "./fusion.js";
 import type { SignedFusionOrder } from "./index.js";
 import { classifyMint, type ClearstoneMintMeta } from "./match.js";
 
@@ -56,15 +57,20 @@ export async function tryRouteOrder(
   clients: SolverClients,
   order: SignedFusionOrder
 ): Promise<FillPlan | null> {
-  const config = order.config as any; // TODO(fusion): import + use OrderConfig type
+  // FusionOrderConfig is anchor-generated from the vendored fusion IDL
+  // (srcAmount / minDstAmount / estimatedDstAmount / fee / dutchAuctionData /
+  // resolverPolicy / ...). Note: src/dst mint + maker_receiver are NOT
+  // fields on OrderConfig — they're hashed-into-orderHash side-data
+  // carried on the SignedFusionOrder envelope.
+  const config = order.config as FusionOrderConfig;
 
-  const dstMint = new PublicKey(config.dstMint ?? config.dst_mint);
+  const dstMint = new PublicKey(order.dstMint);
   const meta = await classifyMint(clients, dstMint);
   if (!meta) return null; // not a clearstone PT/YT — solver ignores
   if (meta.kind === "yt") return null; // YT routing via buy_yt is a v2 follow-up
 
-  const srcAmount = new BN(config.srcAmount ?? config.src_amount);
-  const minDstAmount = new BN(config.minDstAmount ?? config.min_dst_amount);
+  const srcAmount = new BN(config.srcAmount.toString());
+  const minDstAmount = new BN(config.minDstAmount.toString());
 
   // Read the first active market for this vault. A full solver would pick
   // across seed_ids and maturity; we take seed_id = 1 for the demo.

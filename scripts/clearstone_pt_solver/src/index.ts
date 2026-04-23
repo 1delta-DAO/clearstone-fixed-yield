@@ -72,7 +72,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 export interface SignedFusionOrder {
-  /** Hex-encoded sha256(program_id || borsh(OrderConfig)) — identity + dedup key. */
+  /** Hex-encoded sha256(program_id || borsh(OrderConfig) || ...) — identity + dedup key. */
   orderHash: string;
   /** Base58-encoded maker pubkey that signed the order hash. */
   makerPubkey: string;
@@ -80,6 +80,20 @@ export interface SignedFusionOrder {
   signature: string;
   /** JSON-encoded fusion OrderConfig. See fusion programs/clearstone-fusion/src/lib.rs. */
   config: unknown;
+  /**
+   * Side-carried pubkeys that fusion's `order_hash` hashes into the signed
+   * digest but that are NOT stored in OrderConfig itself:
+   *   order_hash(order, protocol_dst, integrator_dst, src_mint, dst_mint, receiver)
+   * Any mismatch invalidates the Ed25519 verification preceding fusion.fill.
+   */
+  srcMint: string;
+  dstMint: string;
+  makerReceiver: string;
+  /**
+   * Fee destination pubkeys. Optional; omit for "no protocol/integrator fee".
+   */
+  protocolDstAcc?: string;
+  integratorDstAcc?: string;
 }
 
 main().catch((err) => {

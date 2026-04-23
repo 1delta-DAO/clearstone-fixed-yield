@@ -1743,6 +1743,18 @@ export interface FullStack {
 export const CURATOR_VAULT_SEED = Buffer.from("curator_vault");
 export const BASE_ESCROW_SEED = Buffer.from("base_escrow");
 export const USER_POS_SEED = Buffer.from("user_pos");
+export const ROLL_DELEGATION_SEED = Buffer.from("roll_deleg");
+
+export function findRollDelegation(
+  curatorVault: PublicKey,
+  user: PublicKey,
+  programId: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [ROLL_DELEGATION_SEED, curatorVault.toBuffer(), user.toBuffer()],
+    programId
+  );
+}
 
 export function findCuratorVault(
   curator: PublicKey,

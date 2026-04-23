@@ -50,11 +50,9 @@ export async function buildAndSendFill(
   const tx = new Transaction();
   const orderConfig = order.config as any;
   const maker = new PublicKey(order.makerPubkey);
-  const makerReceiver = new PublicKey(
-    orderConfig.makerReceiver ?? orderConfig.maker_receiver ?? order.makerPubkey
-  );
-  const srcMint = new PublicKey(orderConfig.srcMint ?? orderConfig.src_mint);
-  const dstMint = new PublicKey(orderConfig.dstMint ?? orderConfig.dst_mint);
+  const makerReceiver = new PublicKey(order.makerReceiver);
+  const srcMint = new PublicKey(order.srcMint);
+  const dstMint = new PublicKey(order.dstMint);
 
   // Token-program inference — fusion supports both SPL and T2022 on either leg.
   // For a KYC'd flow the src (dSY) is Token-2022; the dst (PT) is SPL from core.
@@ -231,6 +229,19 @@ async function buildFlashFillIx(
     clients.fusionProgramId
   );
 
+  // Fee-slot resolution. Anchor's Option<Account> convention at the CPI
+  // boundary: pass the program id itself as the "None" sentinel. Any other
+  // sentinel would fail the upstream Option<Account> deserializer.
+  const protocolDstAcc = order.protocolDstAcc
+    ? new PublicKey(order.protocolDstAcc)
+    : clients.fusionProgramId;
+  const integratorDstAcc = order.integratorDstAcc
+    ? new PublicKey(order.integratorDstAcc)
+    : clients.fusionProgramId;
+  const protocolDstSupplied = order.protocolDstAcc != null;
+  const integratorDstSupplied = order.integratorDstAcc != null;
+
+  // 17-slot fusion Fill passthrough in the exact order OnFlashPtReceived expects.
   const fusionPassthrough: AccountMeta[] = [
     { pubkey: clients.fusionProgramId, isSigner: false, isWritable: false },
     { pubkey: resolved.maker, isSigner: false, isWritable: true },
@@ -244,11 +255,11 @@ async function buildFlashFillIx(
     { pubkey: resolved.dstTokenProgram, isSigner: false, isWritable: false },
     { pubkey: delegateAuthority, isSigner: false, isWritable: false },
     { pubkey: orderState, isSigner: false, isWritable: true },
-    // Optional fee slots — None on the Rust side surfaces as Pubkey::default().
-    // Fusion's Fill struct handles Option<UncheckedAccount>; we pass default
-    // here and the callback's Anchor deserializer skips optional Nones.
-    // TODO(solver): when the order carries real protocol/integrator fee
-    // destinations, populate these from orderConfig.fee.*_dst_acc.
+    // Optional fee slots — real pubkey when the order carries a fee route,
+    // fusion program id sentinel when not. Writable iff supplied (fee-leg
+    // transfer needs mut); None-sentinels stay readonly.
+    { pubkey: protocolDstAcc, isSigner: false, isWritable: protocolDstSupplied },
+    { pubkey: integratorDstAcc, isSigner: false, isWritable: integratorDstSupplied },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },

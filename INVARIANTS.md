@@ -17,6 +17,9 @@ enforcement and property).
   governor composability).
 - **I-F\*** — Flash-swap discipline (Pendle-style PT flash borrow with
   callback; see INTENT_FLASH_PLAN.md).
+- **I-D\*** — Roll-delegation discipline (user-signed permissioning for
+  permissionless auto-roll keepers; see
+  [CURATOR_ROLL_DELEGATION.md](../clearstone-finance/CURATOR_ROLL_DELEGATION.md)).
 
 ---
 
@@ -639,6 +642,67 @@ no intermediate state is visible.
 
 ---
 
+## Roll-delegation invariants
+
+Scope: [periphery/clearstone_curator/src/roll_delegation.rs](periphery/clearstone_curator/src/roll_delegation.rs)
+and `crank_roll_delegated` in [periphery/clearstone_curator/src/lib.rs](periphery/clearstone_curator/src/lib.rs).
+Full rationale in [CURATOR_ROLL_DELEGATION.md](../clearstone-finance/CURATOR_ROLL_DELEGATION.md) §4.
+
+### I-D1 — Only user creates or closes their delegation
+
+**Enforced.** `CreateDelegation` and `CloseDelegation` require `user:
+Signer`; `CloseDelegation` additionally carries `has_one = user` on the
+delegation account. PDA seeds `[b"roll_deleg", vault, user]` guarantee
+one delegation per (vault, user).
+
+### I-D2 — `max_slippage_bps ≤ 1000`
+
+**Enforced.** Handler-entry `require!` check against
+`MAX_DELEGATION_SLIPPAGE_BPS = 1_000`. Covered by
+`roll_delegation::tests::slippage_floor_at_max_1000bps`.
+
+### I-D3 — TTL in [~1 day, ~100 days]
+
+**Enforced.** Handler-entry `require!` checks against
+`MIN_DELEGATION_TTL_SLOTS = 216_000` and
+`MAX_DELEGATION_TTL_SLOTS = 21_600_000`. Covered by
+`ttl_bounds_cover_reasonable_range`.
+
+### I-D4 — Allocation drift invalidates delegation
+
+**Enforced.** `validate_delegation` computes
+`hash_allocations(current)` and requires equality with the stored
+`allocations_hash`. The hash commits to `(market, weight_bps,
+cap_base)` for each allocation; `deployed_base` is deliberately
+excluded so normal rolls don't invalidate the delegation. Covered by
+`hash_is_deterministic_across_identical_inputs`,
+`hash_changes_when_{market,weight,cap}_changes`, and
+`hash_ignores_deployed_base`.
+
+### I-D5 — `from_market` past its expiration
+
+**Enforced.** `crank_roll_delegated` checks
+`Clock::unix_timestamp >= from_market.financials.expiration_ts`
+before any CPI fires. Keepers cannot pre-empt yield by rolling early.
+
+### I-D6 — Keeper's `min_base_out` ≥ delegation floor, AND actual ≥ min
+
+**Enforced twice.** Pre-CPI: `require!(min_base_out >=
+slippage_floor(deployed, max_slippage_bps))`. Post-CPI: after the
+from-leg, `require!(base_escrow.amount - before >= min_base_out)`.
+User bounds the acceptable slippage, keeper proposes the floor,
+on-chain math confirms. Covered by slippage-floor arithmetic tests;
+integration-test coverage lives in Pass E.
+
+### I-D7 — Atomicity
+
+**Enforced by construction.** `crank_roll_delegated` executes six CPIs
+(withdraw_liquidity → trade_pt sell → redeem_sy → mint_sy →
+deposit_liquidity, with reloads between them) in a single instruction.
+Any failure in any leg reverts the transaction — no half-rolled state
+persists. `NothingToRoll` (zero deployed) and `DeployedBaseDrift`
+(vault LP ATA < claimed) fail fast before any state mutation.
+
 ## Invariant-coverage audit checklist
 
 Run before every PR that touches state or CPI:
@@ -675,3 +739,11 @@ Run before every PR that touches state or CPI:
 - [ ] Every market-mutating handler's `validate` gates on
       `market.flash_pt_debt == 0`; new handlers added to MarketTwo must
       add the same gate (I-F1).
+- [ ] `crank_roll_delegated` calls `validate_delegation` before any
+      state mutation or CPI (I-D4, I-D5).
+- [ ] `crank_roll_delegated` captures `base_escrow.amount` before the
+      from-leg and re-checks the delta against `min_base_out` after
+      (I-D6 post-check).
+- [ ] New paths that introduce a permissionless signer must walk the
+      I-D invariant list — any non-user-bounded action must surface
+      the bound via a PDA the user signed.

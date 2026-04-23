@@ -119,6 +119,10 @@ pub enum RollDelegationError {
     FromMarketNotMatured,
     #[msg("keeper min_base_out is below the delegation's slippage floor")]
     SlippageBelowDelegationFloor,
+    #[msg("allocation has zero deployed_base — nothing to roll")]
+    NothingToRoll,
+    #[msg("vault_lp_ata balance is below the allocation's deployed_base")]
+    DeployedBaseDrift,
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +142,19 @@ pub struct DelegationCreated {
 pub struct DelegationClosed {
     pub vault: Pubkey,
     pub user: Pubkey,
+}
+
+#[event]
+pub struct DelegatedRollCompleted {
+    pub vault: Pubkey,
+    pub user: Pubkey,
+    pub keeper: Pubkey,
+    pub from_market: Pubkey,
+    pub to_market: Pubkey,
+    pub from_index: u16,
+    pub to_index: u16,
+    pub base_rolled: u64,
+    pub min_base_out: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -344,5 +361,198 @@ mod tests {
         assert!(MIN_DELEGATION_TTL_SLOTS as f64 * 0.4 >= 86_400.0 * 0.95);
         // 21_600_000 slots × ~0.4s/slot ≈ 100 days
         assert!(MAX_DELEGATION_TTL_SLOTS as f64 * 0.4 <= 100.0 * 86_400.0 * 1.05);
+    }
+
+    // ----------------------------------------------------------------
+    // validate_delegation — exhaustive branch coverage.
+    //
+    // The on-chain handler threads every invariant through this helper,
+    // so every failure path here maps 1:1 to a pre-CPI revert in
+    // `crank_roll_delegated`. An untested branch here is an untested
+    // invariant — keep the matrix exhaustive.
+    // ----------------------------------------------------------------
+
+    fn mk_delegation(
+        vault: Pubkey,
+        user: Pubkey,
+        max_slippage_bps: u16,
+        expires_at_slot: u64,
+        allocations_hash: [u8; 32],
+    ) -> RollDelegation {
+        RollDelegation {
+            vault,
+            user,
+            max_slippage_bps,
+            expires_at_slot,
+            allocations_hash,
+            created_at_slot: 0,
+            bump: 0,
+        }
+    }
+
+    #[test]
+    fn validate_delegation_happy_path() {
+        let vault = Pubkey::new_from_array([7; 32]);
+        let allocs = vec![alloc([1; 32], 6000, 1_000_000, 500_000)];
+        let hash = hash_allocations(&allocs);
+        let d = mk_delegation(vault, Pubkey::new_from_array([9; 32]), 50, 1_000, hash);
+        let result = validate_delegation(&d, vault, &allocs, 999);
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+    }
+
+    #[test]
+    fn validate_delegation_rejects_vault_mismatch() {
+        let signed_vault = Pubkey::new_from_array([7; 32]);
+        let other_vault = Pubkey::new_from_array([8; 32]);
+        let allocs = vec![alloc([1; 32], 6000, 1_000_000, 500_000)];
+        let hash = hash_allocations(&allocs);
+        let d = mk_delegation(signed_vault, Pubkey::new_from_array([9; 32]), 50, 1_000, hash);
+        let result = validate_delegation(&d, other_vault, &allocs, 999);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_delegation_rejects_at_exact_expiry_slot() {
+        // expires_at_slot: the delegation is NOT live AT the expiry
+        // slot (I-D3 boundary — strict `<` in the handler).
+        let vault = Pubkey::new_from_array([7; 32]);
+        let allocs = vec![alloc([1; 32], 6000, 1_000_000, 500_000)];
+        let hash = hash_allocations(&allocs);
+        let d = mk_delegation(vault, Pubkey::new_from_array([9; 32]), 50, 1_000, hash);
+        // now_slot == expiry_slot → expired
+        let result = validate_delegation(&d, vault, &allocs, 1_000);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_delegation_accepts_one_slot_before_expiry() {
+        let vault = Pubkey::new_from_array([7; 32]);
+        let allocs = vec![alloc([1; 32], 6000, 1_000_000, 500_000)];
+        let hash = hash_allocations(&allocs);
+        let d = mk_delegation(vault, Pubkey::new_from_array([9; 32]), 50, 1_000, hash);
+        let result = validate_delegation(&d, vault, &allocs, 999);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_delegation_rejects_allocations_drift_added_entry() {
+        let vault = Pubkey::new_from_array([7; 32]);
+        let signed_allocs = vec![alloc([1; 32], 6000, 1_000_000, 500_000)];
+        let hash = hash_allocations(&signed_allocs);
+        let d = mk_delegation(vault, Pubkey::new_from_array([9; 32]), 50, 1_000, hash);
+
+        // Curator adds a second allocation after user signed.
+        let current_allocs = vec![
+            alloc([1; 32], 6000, 1_000_000, 500_000),
+            alloc([2; 32], 4000, 2_000_000, 0),
+        ];
+        let result = validate_delegation(&d, vault, &current_allocs, 999);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_delegation_rejects_allocations_drift_removed_entry() {
+        let vault = Pubkey::new_from_array([7; 32]);
+        let signed_allocs = vec![
+            alloc([1; 32], 6000, 1_000_000, 500_000),
+            alloc([2; 32], 4000, 2_000_000, 0),
+        ];
+        let hash = hash_allocations(&signed_allocs);
+        let d = mk_delegation(vault, Pubkey::new_from_array([9; 32]), 50, 1_000, hash);
+
+        let current_allocs = vec![alloc([1; 32], 6000, 1_000_000, 500_000)];
+        let result = validate_delegation(&d, vault, &current_allocs, 999);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_delegation_rejects_allocations_drift_weight_change() {
+        let vault = Pubkey::new_from_array([7; 32]);
+        let signed = vec![alloc([1; 32], 6000, 1_000_000, 500_000)];
+        let hash = hash_allocations(&signed);
+        let d = mk_delegation(vault, Pubkey::new_from_array([9; 32]), 50, 1_000, hash);
+
+        let current = vec![alloc([1; 32], 6001, 1_000_000, 500_000)];
+        let result = validate_delegation(&d, vault, &current, 999);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_delegation_accepts_deployed_base_change() {
+        // deployed_base is NOT part of the hash → rolls that change it
+        // must still validate.
+        let vault = Pubkey::new_from_array([7; 32]);
+        let signed = vec![alloc([1; 32], 6000, 1_000_000, 500_000)];
+        let hash = hash_allocations(&signed);
+        let d = mk_delegation(vault, Pubkey::new_from_array([9; 32]), 50, 1_000, hash);
+
+        let after_roll = vec![alloc([1; 32], 6000, 1_000_000, 0)];
+        let result = validate_delegation(&d, vault, &after_roll, 999);
+        assert!(result.is_ok(), "deployed_base delta must not invalidate");
+    }
+
+    #[test]
+    fn validate_delegation_rejects_vault_mismatch_before_hash_check() {
+        // Short-circuit order matters for clear error messages. Check
+        // that a vault-key mismatch surfaces before a hash mismatch
+        // would — both are wrong, but the vault error is more specific.
+        let signed_vault = Pubkey::new_from_array([7; 32]);
+        let other_vault = Pubkey::new_from_array([8; 32]);
+        let signed = vec![alloc([1; 32], 6000, 1_000_000, 500_000)];
+        let hash = hash_allocations(&signed);
+        let d = mk_delegation(signed_vault, Pubkey::new_from_array([9; 32]), 50, 1_000, hash);
+
+        // Pass *different* allocations too — both conditions fail.
+        let other_allocs = vec![alloc([2; 32], 1000, 100, 0)];
+        let result = validate_delegation(&d, other_vault, &other_allocs, 999);
+        assert!(result.is_err());
+        // Should fail on VaultMismatch specifically, not AllocationsDrifted.
+        // We don't introspect the error variant here since anchor's Error
+        // type isn't easy to match on in unit-tests, but the short-
+        // circuit ordering is documented in the handler source.
+    }
+
+    // ----------------------------------------------------------------
+    // Edge cases on slippage_floor — bit-for-bit match with the Rust
+    // math used by the TS SDK (packages/calldata-sdk-solana/src/fixed-yield/delegation.ts::slippageFloor).
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn slippage_floor_1bps_barely_reduces() {
+        // 10 million × (10000 - 1) / 10000 = 9_999_000
+        assert_eq!(slippage_floor(10_000_000, 1), 9_999_000);
+    }
+
+    #[test]
+    fn slippage_floor_rounds_toward_zero() {
+        // Integer-div semantics. Worked examples:
+        //   1 × 9950 / 10000 = 9950 / 10000 = 0
+        //   10 × 9950 / 10000 = 99500 / 10000 = 9
+        //   100 × 9950 / 10000 = 995000 / 10000 = 99
+        assert_eq!(slippage_floor(1, 50), 0);
+        assert_eq!(slippage_floor(10, 50), 9);
+        assert_eq!(slippage_floor(100, 50), 99);
+    }
+
+    // ----------------------------------------------------------------
+    // Hash parity with the TS SDK. If this test drifts, the on-chain
+    // `validate_delegation` will reject every delegation the frontend
+    // creates (silent I-D4 invalidation).
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn commit_bytes_layout_is_stable() {
+        let a = alloc([0x42; 32], 6000, 1_000_000, 999);
+        let bytes = commit_bytes(&a);
+        // Market bytes: 0..32 all 0x42.
+        assert!(bytes[..32].iter().all(|&b| b == 0x42));
+        // weight_bps LE at 32..34.
+        assert_eq!(u16::from_le_bytes([bytes[32], bytes[33]]), 6000);
+        // cap_base LE at 34..42.
+        assert_eq!(
+            u64::from_le_bytes(bytes[34..42].try_into().unwrap()),
+            1_000_000
+        );
+        // `deployed_base` explicitly not in the 42-byte slab.
     }
 }

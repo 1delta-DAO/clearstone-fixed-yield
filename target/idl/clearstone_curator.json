@@ -8,6 +8,277 @@
   },
   "instructions": [
     {
+      "name": "close_delegation",
+      "discriminator": [
+        41,
+        110,
+        46,
+        165,
+        0,
+        109,
+        193,
+        193
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "delegation",
+          "writable": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "crank_roll_delegated",
+      "docs": [
+        "Permissionless keeper crank — performs matured → next rebalance",
+        "under a user-signed RollDelegation. Keeper signs the outer tx;",
+        "vault PDA signs the inner CPIs.",
+        "",
+        "Invariants enforced (see CURATOR_ROLL_DELEGATION.md §4):",
+        "I-D4 allocation hash matches delegation",
+        "I-D5 from_market past expiration",
+        "I-D6 min_base_out ≥ delegation's slippage floor",
+        "I-D7 atomic — single instruction = single failure domain",
+        "",
+        "NOTE: CPI composition duplicates the three-step pattern from",
+        "`reallocate_from_market` (withdraw_liquidity → trade_pt sell →",
+        "redeem_sy) and `reallocate_to_market` (mint_sy → trade_pt buy →",
+        "deposit_liquidity). Extracting shared `_inner` fns is tracked in",
+        "FOLLOWUPS.md under `CURATOR_REALLOCATE_DEDUP`; the refactor is",
+        "deferred so this ticket ships without touching the audited",
+        "curator-signed path."
+      ],
+      "discriminator": [
+        58,
+        80,
+        60,
+        46,
+        104,
+        49,
+        78,
+        112
+      ],
+      "accounts": [
+        {
+          "name": "keeper",
+          "docs": [
+            "Pays gas. Zero privilege; the handler never reads `keeper.key()`",
+            "for authorization."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "delegation",
+          "docs": [
+            "User-signed delegation authorizing this roll. Constraint binds",
+            "it to the vault; handler re-checks hash + expiry + slippage."
+          ]
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "base_mint"
+        },
+        {
+          "name": "base_escrow",
+          "docs": [
+            "base_escrow: typed because the handler reloads + reads .amount",
+            "to compute the min_base_out post-check."
+          ],
+          "writable": true
+        },
+        {
+          "name": "sy_market"
+        },
+        {
+          "name": "sy_mint",
+          "writable": true
+        },
+        {
+          "name": "adapter_base_vault",
+          "writable": true
+        },
+        {
+          "name": "vault_sy_ata",
+          "docs": [
+            "vault_sy_ata: typed because we reload + read .amount between",
+            "redeem/mint CPIs."
+          ],
+          "writable": true
+        },
+        {
+          "name": "from_market",
+          "docs": [
+            "from_market: typed because handler reads `.financials.expiration_ts`",
+            "for the maturity gate (I-D5)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "from_market_escrow_pt",
+          "writable": true
+        },
+        {
+          "name": "from_market_escrow_sy",
+          "writable": true
+        },
+        {
+          "name": "from_token_fee_treasury_sy",
+          "writable": true
+        },
+        {
+          "name": "from_market_alt"
+        },
+        {
+          "name": "from_mint_pt"
+        },
+        {
+          "name": "from_mint_lp",
+          "writable": true
+        },
+        {
+          "name": "from_vault_pt_ata",
+          "docs": [
+            "from_vault_pt_ata: typed; handler reloads + reads .amount after",
+            "`withdraw_liquidity` to size the subsequent trade_pt sell."
+          ],
+          "writable": true
+        },
+        {
+          "name": "from_vault_lp_ata",
+          "docs": [
+            "from_vault_lp_ata: typed; handler reads .amount to enforce",
+            "`DeployedBaseDrift` (vault_lp_ata.amount >= deployed_base)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "to_market",
+          "writable": true
+        },
+        {
+          "name": "to_market_escrow_pt",
+          "writable": true
+        },
+        {
+          "name": "to_market_escrow_sy",
+          "writable": true
+        },
+        {
+          "name": "to_token_fee_treasury_sy",
+          "writable": true
+        },
+        {
+          "name": "to_market_alt"
+        },
+        {
+          "name": "to_mint_pt"
+        },
+        {
+          "name": "to_mint_lp",
+          "writable": true
+        },
+        {
+          "name": "to_vault_pt_ata",
+          "docs": [
+            "via SPL associated-token-program idempotent init before the crank."
+          ],
+          "writable": true
+        },
+        {
+          "name": "to_vault_lp_ata",
+          "docs": [
+            "requirement as to_vault_pt_ata."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        },
+        {
+          "name": "associated_token_program"
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "from_index",
+          "type": "u16"
+        },
+        {
+          "name": "to_index",
+          "type": "u16"
+        },
+        {
+          "name": "min_base_out",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "create_delegation",
+      "discriminator": [
+        177,
+        165,
+        93,
+        55,
+        227,
+        163,
+        61,
+        175
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "docs": [
+            "The vault this delegation authorizes rolls for. Read-only — the",
+            "handler just reads `allocations` for the commitment."
+          ]
+        },
+        {
+          "name": "delegation",
+          "writable": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "max_slippage_bps",
+          "type": "u16"
+        },
+        {
+          "name": "ttl_slots",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "deposit",
       "docs": [
         "User deposits `amount_base`, receives shares. Pro-rata against",
@@ -704,6 +975,19 @@
       ]
     },
     {
+      "name": "RollDelegation",
+      "discriminator": [
+        138,
+        158,
+        170,
+        187,
+        76,
+        104,
+        230,
+        238
+      ]
+    },
+    {
       "name": "UserPosition",
       "discriminator": [
         251,
@@ -742,6 +1026,45 @@
         62,
         151,
         230
+      ]
+    },
+    {
+      "name": "DelegatedRollCompleted",
+      "discriminator": [
+        132,
+        205,
+        244,
+        26,
+        104,
+        40,
+        237,
+        162
+      ]
+    },
+    {
+      "name": "DelegationClosed",
+      "discriminator": [
+        225,
+        66,
+        187,
+        107,
+        192,
+        71,
+        85,
+        138
+      ]
+    },
+    {
+      "name": "DelegationCreated",
+      "discriminator": [
+        20,
+        93,
+        12,
+        34,
+        227,
+        63,
+        100,
+        136
       ]
     },
     {
@@ -1144,6 +1467,99 @@
               "reallocate_to_market / reallocate_from_market."
             ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DelegatedRollCompleted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "keeper",
+            "type": "pubkey"
+          },
+          {
+            "name": "from_market",
+            "type": "pubkey"
+          },
+          {
+            "name": "to_market",
+            "type": "pubkey"
+          },
+          {
+            "name": "from_index",
+            "type": "u16"
+          },
+          {
+            "name": "to_index",
+            "type": "u16"
+          },
+          {
+            "name": "base_rolled",
+            "type": "u64"
+          },
+          {
+            "name": "min_base_out",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DelegationClosed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "user",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DelegationCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_slippage_bps",
+            "type": "u16"
+          },
+          {
+            "name": "expires_at_slot",
+            "type": "u64"
+          },
+          {
+            "name": "allocations_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
           }
         ]
       }
@@ -1565,6 +1981,22 @@
                 1
               ]
             }
+          },
+          {
+            "name": "flash_pt_debt",
+            "docs": [
+              "Pending PT owed back to this market by an in-flight `flash_swap_pt`.",
+              "Zero at rest. Non-zero means: (a) a flash callback is currently",
+              "executing and (b) no other `flash_swap_pt` may enter (blocks nested",
+              "flash reentry). See INTENT_FLASH_PLAN.md §5.3 and I-F1 in",
+              "INVARIANTS.md.",
+              "",
+              "Appended at the end of the struct so existing markets' layouts are",
+              "not disturbed — the realloc_market ix grows them to include this",
+              "field on-demand. Markets without the appended bytes must not call",
+              "`flash_swap_pt` (guarded at handler entry)."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -1638,6 +2070,70 @@
           {
             "name": "deployed_base",
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RollDelegation",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "docs": [
+              "The curator vault this delegation authorizes rolls for."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "user",
+            "docs": [
+              "The user wallet that signed the delegation."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "max_slippage_bps",
+            "docs": [
+              "Ceiling on per-roll slippage, in bps of notional."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "expires_at_slot",
+            "docs": [
+              "Expiry slot; once `Clock::slot >= this`, the delegation is dead."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "allocations_hash",
+            "docs": [
+              "Commitment over the curator's allocation whitelist at signing",
+              "time. If the curator changes allocations, this hash drifts and",
+              "the delegation becomes unusable until the user re-signs."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "created_at_slot",
+            "docs": [
+              "Slot at creation — audit / stale-position detection."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
           }
         ]
       }

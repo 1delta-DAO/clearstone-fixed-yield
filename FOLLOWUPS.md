@@ -6,6 +6,173 @@ written are struck through.
 
 ---
 
+## CURATOR_REALLOCATE_DEDUP — Extract `reallocate_{from,to}_inner` helpers
+
+Opened by: roll-delegation Pass B ([CURATOR_ROLL_DELEGATION.md](../clearstone-finance/CURATOR_ROLL_DELEGATION.md)).
+
+`crank_roll_delegated` in [periphery/clearstone_curator/src/lib.rs](periphery/clearstone_curator/src/lib.rs)
+duplicates the three-step CPI composition of `reallocate_from_market`
+(withdraw_liquidity → trade_pt sell → redeem_sy) and
+`reallocate_to_market` (mint_sy → trade_pt buy → deposit_liquidity).
+~120 LOC of near-identical inlined CPI glue.
+
+Why deferred: Pass B shipped under time pressure with no runnable
+integration test harness in-session. Refactoring proven curator-signed
+code without regression coverage was judged riskier than the one-time
+duplication cost.
+
+To close: extract `reallocate_from_inner(&ReallocateFromAccts, ...)` and
+`reallocate_to_inner(&ReallocateToAccts, ...)` as free functions taking
+a struct of `AccountInfo<'info>` fields. Wire all three handlers
+(`reallocate_to_market`, `reallocate_from_market`, `crank_roll_delegated`)
+through the inners. Add an `as_inner()` method per Accounts struct.
+Keep behavior identical — bit-for-bit same emitted events, same CPI
+argument order.
+
+Gated on: Pass E (integration tests for the delegated path). Don't
+refactor until those tests pass against the inlined version, then flip
+to the extracted version and re-run.
+
+---
+
+## ✅ CURATOR_CRANK_STACK_OVERFLOW — `CrankRollDelegated::try_accounts` overflow (RESOLVED)
+
+Opened by: roll-delegation Pass B.
+Resolved by: Pass E follow-up — converted 12 typed account fields to
+`UncheckedAccount<'info>` and dropped `init_if_needed` on the TO-side
+vault ATAs.
+
+### What was failing
+
+`anchor build -p clearstone_curator` emitted six identical errors
+pointing at `CrankRollDelegated::try_accounts`:
+
+```
+Error: A function call in method …CrankRollDelegated…try_accounts
+overwrites values in the frame.
+```
+
+The struct had 32 accounts, most `Box<InterfaceAccount<'info, …>>`.
+Anchor's generated deserialize path serialized every typed field to
+the stack before moving into the Box, accumulating ~10 KB of frame
+against the SBF cap of 4 KB.
+
+### Fix
+
+Kept as typed: `vault`, `delegation`, `from_market`, plus the four
+balance-reading ATAs (`base_escrow`, `vault_sy_ata`, `from_vault_pt_ata`,
+`from_vault_lp_ata`). These access fields or `.reload()+.amount` in
+the handler, so deserialization is mandatory.
+
+Converted to `UncheckedAccount<'info>` (12 fields): every other mint,
+SY pool, market escrow, and the entire TO-market side. Address
+constraints (`#[account(address = from_market.token_pt_escrow)]`)
+still validate — Anchor runs those as pubkey comparisons even without
+deserialization.
+
+Dropped `init_if_needed` on `to_vault_pt_ata` / `to_vault_lp_ata`. The
+keeper's [roll-delegated.ts](../clearstone-finance/packages/keeper-auto-roll/src/roll-delegated.ts)
+now prepends two `createAssociatedTokenAccountIdempotentInstruction`
+ixs before the crank, covering the one-time rent per (vault, market).
+
+### Post-fix verification
+
+```
+anchor build -p clearstone_curator 2>&1 | grep CrankRoll
+  (nothing — CrankRollDelegated symbols no longer appear in the
+   stack-overflow list)
+```
+
+One remaining top-level stack-frame warning exists — on the generic
+`core::ops::function::FnOnce::call_once` at 10432 bytes. That's the
+handler-body monomorphization, not the Accounts-struct parse, and is
+a separate concern (the crank handler composes six CPIs with
+large CpiContext structs). Tracked as
+`CURATOR_CRANK_HANDLER_FRAME` below if we hit a real on-chain failure.
+
+### Caller-side breaking change
+
+Anyone calling `crank_roll_delegated` must pre-create the TO-side
+vault PT and LP ATAs. The `buildCrankRollDelegated` SDK builder is
+unchanged (same 33-account list) — only the runtime-lifecycle
+contract shifted.
+
+---
+
+## CURATOR_CRANK_HANDLER_FRAME — ambient 10 KB FnOnce warning (NOT crank_roll_delegated)
+
+Opened by: Pass E follow-up to `CURATOR_CRANK_STACK_OVERFLOW`.
+Updated by: handler-body refactor (Pass E.5).
+
+### What changed
+
+The handler body was refactored to factor every CPI composition into
+a dedicated `#[inline(never)]` helper under `mod crank_cpi`:
+
+- `do_withdraw_liquidity`, `do_trade_pt_sell`, `do_redeem_sy`
+- `do_mint_sy`, `do_deposit_liquidity`
+
+Each helper takes `&CrankRollDelegated<'info>` + signer_seeds + args.
+Vault-mutable state updates are scoped tightly around the CPI chain
+so the helpers always run with an immutable borrow of the accounts
+struct. Cleaner code, future-proof for heap-allocation swaps if we
+still need them.
+
+### Diagnostic: the remaining FnOnce warning is NOT this handler
+
+After the refactor, `anchor build` still emits:
+
+```
+Error: Function _ZN4core3ops8function6FnOnce9call_once17ha8f76e99b1a42f66E
+Stack offset of 10432 exceeded max offset of 4096 by 6336 bytes
+```
+
+The demangled hash `17ha8f76e99b1a42f66E` is **identical** before and
+after the refactor. Rust's symbol hashing is a content digest of the
+monomorphized type — an unchanged hash means the function body
+hasn't changed. Since we materially rewrote `crank_roll_delegated`,
+this FnOnce is necessarily in some other call site.
+
+Candidates — other handlers with five or more CPI compositions or
+large local `CpiContext` structs. Likely suspects inside
+`clearstone_curator`: `reallocate_to_market` or `reallocate_from_market`
+(both have ~3 CPI chains with similar shape). Likely suspects inside
+`clearstone_core` pulled into the curator crate via the `cpi` feature:
+any of the trade/liquidity composition functions.
+
+### Next step (when it matters)
+
+Don't pre-optimize. When the first on-chain execution of any
+curator handler fails, use `solana logs` + `llvm-nm` on the
+`.so` to identify the exact handler via the truncated symbol
+prefix. Then apply the same `#[inline(never)]` helper pattern to
+whichever handler is the actual hot spot.
+
+Non-blocking for host tests and for the crank_roll_delegated path
+specifically.
+
+---
+
+## CURATOR_ROLL_DELEGATION_V1_1 — Keeper tips + configurable PT/SY intent split
+
+Opened by: roll-delegation Pass B §8.
+
+v1 `crank_roll_delegated` hardcodes the to-leg's `pt_intent = 0`,
+which means the roll parks the unwound base entirely as SY-sided
+liquidity on the next market's AMM. For a real auto-roll product that
+tracks the curator's allocation weights, the ix should accept
+`pt_buy_amount` + `pt_intent` + `sy_intent` as additional parameters
+bounded by the delegation's slippage cap.
+
+Also opens: keeper tip. Add `tip_bps: u16` to `RollDelegation` (capped
+at ~10 bps). At end of handler, transfer `tip_bps × base_out / 10_000`
+from `base_escrow` to the keeper's base-ATA. Makes crank runs
+self-funding — MEV-tolerant keepers will compete on latency, not
+custody.
+
+---
+
+
 ## ✅ M2 — Reentrancy guard coverage (**RESOLVED**)
 
 Initial state: 5 instructions wrapped with `enter/persist/leave`; 7 others
