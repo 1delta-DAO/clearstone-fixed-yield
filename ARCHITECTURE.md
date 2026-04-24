@@ -18,30 +18,30 @@ For the safety spec see [INVARIANTS.md](INVARIANTS.md).
 │  - init_market_two         │     │  - deposit_sy / withdraw_sy│
 │  - strip / merge           │     │  - get_sy_state            │
 │  - trade_pt / buy_yt       │     │  - claim_emission          │
-│  - collect_interest        │     │  - get_position            │
-│  - deposit/withdraw_liq    │     │  - init_personal_account   │
-│  - modify_* (curator)      │     │                            │
-└─────────┬──────────────────┘     │  Reference impls:          │
-          ▲                        │  - generic_exchange_rate_sy│
-          │                        │    (pokable exchange rate) │
-          │                        │                            │
-          │ CPI                    │  Test-only impls:          │
-          │                        │  - malicious_sy_nonsense   │
-  ┌───────┴────────┐               │    (returns garbage state) │
-  │ clearstone_    │               └────────────────────────────┘
-  │ router         │                            ▲
-  │                │                            │ CPI
-  │ (periphery —   │                            │
-  │  base ↔ SY     │──────────────CPI───────────┘
-  │  UX sugar)     │
-  └────────────────┘
-          ▲
-          │ user tx
-          │
-      ┌───┴───┐
-      │ user  │
+│  - flash_swap_pt           │     │  - get_position            │
+│  - collect_interest        │     │  - init_personal_account   │
+│  - deposit/withdraw_liq    │     │                            │
+│  - modify_* (curator)      │     │  Reference impls:          │
+└─────────┬──────────────────┘     │  - generic_exchange_rate_sy│
+          ▲                        │    (pokable rate; ATH ✓)   │
+          │                        │  - kamino_sy_adapter       │
+          │                        │    (Kamino Lend; real yld) │
+          │ CPI                    │                            │
+          │                        │  Test-only impls:          │
+  ┌───────┴────────┐               │  - malicious_sy_nonsense   │
+  │ clearstone_    │               │    (returns garbage state) │
+  │ router         │               │  - malicious_sy_reentrant  │
+  │                │               │    (reenters core mid-CPI) │
+  │ (periphery —   │               │  - mock_klend, mock_flash…│
+  │  base ↔ SY     │               └────────────────────────────┘
+  │  UX sugar)     │                            ▲
+  └────────────────┘                            │ CPI
+          ▲                                     │
+          │ user tx                             │
+          │                                     │
+      ┌───┴───┐                                 │
+      │ user  │─────────────CPI────────────────┘
       └───────┘
-
 
   ┌──────────────────────┐        ┌──────────────────────┐
   │ clearstone_rewards   │        │ clearstone_curator   │
@@ -53,6 +53,17 @@ For the safety spec see [INVARIANTS.md](INVARIANTS.md).
   │ users transfer LP    │        │ across multiple      │
   │ tokens here.         │        │ core markets via CPI.│
   └──────────────────────┘        └──────────────────────┘
+
+  ┌───────────────────────────────────┐
+  │ clearstone_solver_callback        │
+  │ (periphery, intent-settlement)    │
+  │                                   │
+  │ Called by clearstone_fusion       │
+  │ during flash fills. Bridges PT    │
+  │ liquidity into the fusion-intent  │
+  │ model via flash_swap_pt + solver- │
+  │ supplied base delivery.           │
+  └───────────────────────────────────┘
 ```
 
 **Trust boundary.** Everything to the left of the "│ CPI →" is

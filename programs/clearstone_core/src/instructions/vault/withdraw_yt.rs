@@ -21,6 +21,7 @@ pub struct WithdrawYt<'info> {
     pub owner: Signer<'info>,
 
     /// Vault that manages YT
+    // Boxed — see DepositYt for the stack-cap rationale.
     #[account(
         mut,
         has_one = sy_program,
@@ -29,7 +30,7 @@ pub struct WithdrawYt<'info> {
         has_one = address_lookup_table,
         has_one = yield_position
     )]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
 
     /// Position data for YT deposits, linked to vault
     #[account(

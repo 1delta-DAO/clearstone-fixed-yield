@@ -9,6 +9,10 @@
   "instructions": [
     {
       "name": "deposit_reserve_liquidity",
+      "docs": [
+        "Deposit liquidity tokens; receive ctokens.",
+        "amount_collateral = floor(amount_liquidity / exchange_rate)"
+      ],
       "discriminator": [
         169,
         201,
@@ -61,6 +65,10 @@
     },
     {
       "name": "initialize_reserve",
+      "docs": [
+        "Initialize a reserve for a given liquidity mint. Creates the ctoken mint and the",
+        "liquidity supply vault. Exchange rate starts at 1.0 (1 liquidity = 1 ctoken)."
+      ],
       "discriminator": [
         91,
         188,
@@ -109,6 +117,9 @@
     },
     {
       "name": "poke_exchange_rate",
+      "docs": [
+        "Test hook: overwrite the collateral exchange rate. Simulates interest accrual."
+      ],
       "discriminator": [
         13,
         104,
@@ -142,6 +153,10 @@
     },
     {
       "name": "redeem_reserve_collateral",
+      "docs": [
+        "Redeem ctokens; receive liquidity tokens.",
+        "amount_liquidity = floor(amount_collateral * exchange_rate)"
+      ],
       "discriminator": [
         234,
         117,
@@ -194,6 +209,10 @@
     },
     {
       "name": "refresh_reserve",
+      "docs": [
+        "No-op; mirrors the shape of klend's `refresh_reserve`. Real klend refreshes",
+        "oracle prices and accrues interest here; the mock has no interest model."
+      ],
       "discriminator": [
         2,
         218,
@@ -242,6 +261,9 @@
   "types": [
     {
       "name": "Number",
+      "docs": [
+        "High precision number, stored as 4 u64 words in little endian"
+      ],
       "type": {
         "kind": "struct",
         "fields": [

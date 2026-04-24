@@ -15,6 +15,10 @@ export type MockKlend = {
   "instructions": [
     {
       "name": "depositReserveLiquidity",
+      "docs": [
+        "Deposit liquidity tokens; receive ctokens.",
+        "amount_collateral = floor(amount_liquidity / exchange_rate)"
+      ],
       "discriminator": [
         169,
         201,
@@ -67,6 +71,10 @@ export type MockKlend = {
     },
     {
       "name": "initializeReserve",
+      "docs": [
+        "Initialize a reserve for a given liquidity mint. Creates the ctoken mint and the",
+        "liquidity supply vault. Exchange rate starts at 1.0 (1 liquidity = 1 ctoken)."
+      ],
       "discriminator": [
         91,
         188,
@@ -115,6 +123,9 @@ export type MockKlend = {
     },
     {
       "name": "pokeExchangeRate",
+      "docs": [
+        "Test hook: overwrite the collateral exchange rate. Simulates interest accrual."
+      ],
       "discriminator": [
         13,
         104,
@@ -148,6 +159,10 @@ export type MockKlend = {
     },
     {
       "name": "redeemReserveCollateral",
+      "docs": [
+        "Redeem ctokens; receive liquidity tokens.",
+        "amount_liquidity = floor(amount_collateral * exchange_rate)"
+      ],
       "discriminator": [
         234,
         117,
@@ -200,6 +215,10 @@ export type MockKlend = {
     },
     {
       "name": "refreshReserve",
+      "docs": [
+        "No-op; mirrors the shape of klend's `refresh_reserve`. Real klend refreshes",
+        "oracle prices and accrues interest here; the mock has no interest model."
+      ],
       "discriminator": [
         2,
         218,
@@ -248,6 +267,9 @@ export type MockKlend = {
   "types": [
     {
       "name": "number",
+      "docs": [
+        "High precision number, stored as 4 u64 words in little endian"
+      ],
       "type": {
         "kind": "struct",
         "fields": [

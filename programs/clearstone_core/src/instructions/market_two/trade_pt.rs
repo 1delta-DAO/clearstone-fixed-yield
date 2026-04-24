@@ -19,6 +19,11 @@ pub struct TradePt<'info> {
     #[account(mut)]
     pub trader: Signer<'info>,
 
+    // Every InterfaceAccount on this struct is `Box<>`ed — otherwise
+    // Anchor's auto-generated `try_accounts` (which decodes + validates
+    // every field in a single stack frame) lands at offset 4104 and
+    // trips BPF's 4096-byte cap under nested-CPI call sites (see
+    // curator::reallocate_to_market and router::wrapper_buy_pt).
     #[account(
         mut,
         has_one = address_lookup_table,
@@ -28,17 +33,17 @@ pub struct TradePt<'info> {
         has_one = token_fee_treasury_sy,
         has_one = mint_sy,
     )]
-    pub market: Account<'info, MarketTwo>,
+    pub market: Box<Account<'info, MarketTwo>>,
 
     /// Trader's SY token account
     /// Mint is constrained by TokenProgram
     #[account(mut, token::mint = mint_sy)]
-    pub token_sy_trader: InterfaceAccount<'info, TokenAccount>,
+    pub token_sy_trader: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Receiving PT token account
     /// Mint is constrained by TokenProgram
     #[account(mut)]
-    pub token_pt_trader: InterfaceAccount<'info, TokenAccount>,
+    pub token_pt_trader: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Account owned by market
     /// This is a temporary account that receives SY tokens from the user, after which it transfers them to the SY program
@@ -58,7 +63,7 @@ pub struct TradePt<'info> {
     pub sy_program: UncheckedAccount<'info>,
 
     #[account(mut, token::mint = mint_sy)]
-    pub token_fee_treasury_sy: InterfaceAccount<'info, TokenAccount>,
+    pub token_fee_treasury_sy: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// SY mint — required for transfer_checked. Constrained via market.has_one.
     pub mint_sy: Box<InterfaceAccount<'info, Mint>>,

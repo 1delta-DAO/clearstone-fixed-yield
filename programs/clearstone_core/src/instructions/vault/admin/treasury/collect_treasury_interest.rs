@@ -29,6 +29,7 @@ pub struct CollectTreasuryInterest<'info> {
     pub yield_position: Box<Account<'info, YieldTokenPosition>>,
 
     /// The vault that holds the SY tokens in escrow
+    // Boxed — try_accounts frame overflows by 8 bytes without it.
     #[account(
         mut,
         has_one = escrow_sy,
@@ -39,14 +40,14 @@ pub struct CollectTreasuryInterest<'info> {
         has_one = curator,
         has_one = mint_sy,
     )]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
 
     /// The receiving token account for SY withdrawn
     #[account(mut, token::mint = mint_sy)]
-    pub sy_dst: InterfaceAccount<'info, TokenAccount>,
+    pub sy_dst: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(mut, token::mint = mint_sy)]
-    pub escrow_sy: InterfaceAccount<'info, TokenAccount>,
+    pub escrow_sy: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// CHECK: constrained by vault
     pub authority: SystemAccount<'info>,

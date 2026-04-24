@@ -460,6 +460,40 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * Advance the validator's Clock by polling sysvar `unix_timestamp` until
+ * it's moved past `afterSeconds` from the current sysvar reading. The
+ * test-validator doesn't expose a `warp` RPC, so we rely on natural slot
+ * progression (≈400ms/slot at default config). Caller should keep this
+ * under ~10s to avoid blowing mocha's per-test timeout.
+ *
+ * Returns the observed delta in seconds — callers can assert it's at
+ * least what they asked for.
+ */
+export async function advanceClock(
+  connection: Connection,
+  afterSeconds: number
+): Promise<number> {
+  const readClock = async (): Promise<number> => {
+    const acc = await connection.getAccountInfo(anchor.web3.SYSVAR_CLOCK_PUBKEY, "confirmed");
+    if (!acc) throw new Error("Clock sysvar not found");
+    return Number(acc.data.readBigInt64LE(32));
+  };
+  const start = await readClock();
+  const deadline = Date.now() + afterSeconds * 1000 + 10_000; // +10s safety
+  let current = start;
+  while (current - start < afterSeconds) {
+    if (Date.now() > deadline) {
+      throw new Error(
+        `advanceClock timed out after ${afterSeconds}s target (got ${current - start}s)`
+      );
+    }
+    await sleep(250);
+    current = await readClock();
+  }
+  return current - start;
+}
+
 // ===== CpiAccounts for the generic adapter =====
 
 /**
@@ -1823,6 +1857,275 @@ export function findStakePosition(
     [STAKE_POSITION_SEED, farmState.toBuffer(), owner.toBuffer()],
     programId
   );
+}
+
+// ===== Curator vault + 2-market composite fixture =====
+//
+// Builds a complete stack for exercising `clearstone_curator`'s
+// reallocate_to_market / mark_to_market flows without forcing every
+// test to re-assemble the ~15 accounts it needs. Depends on the core
+// setupVault + setupMarket being usable (i.e., clearstone-core tests
+// are green). Uses a SINGLE SY market under the base asset, then
+// creates TWO distinct core markets keyed by seed_id=1 and seed_id=2
+// under that vault.
+
+export interface CuratorStackParams {
+  core: Program<ClearstoneCore>;
+  adapter: Program<GenericExchangeRateSy>;
+  curator: Program<any>; // ClearstoneCurator — typed loosely to avoid a cross-import cycle.
+  connection: Connection;
+  payer: Keypair;
+  /** Curator keypair (signs vault init, allocations, rebalances). */
+  curatorKp: Keypair;
+  /** Vault config — passed through to the underlying `setupVault`. */
+  startTimestamp: number;
+  duration: number;
+  /** Per-vault fee params (see setupVault docstring for semantics). */
+  interestBpsFee?: number;
+  creatorFeeBps?: number;
+  feeTreasurySyBps?: number;
+  /** AMM init params for BOTH markets (kept identical for simplicity). */
+  lnFeeRateRoot?: number;
+  rateScalarRoot?: number;
+  initRateAnchor?: number;
+  /** Amount of base to seed the curator vault's base_escrow with. */
+  curatorBaseSeed?: bigint;
+  /** Per-market initial LP seed amounts (same for both). */
+  ptInit?: number;
+  syInit?: number;
+}
+
+export interface CuratorStack {
+  curatorKp: Keypair;
+  baseMint: PublicKey;
+  sy: SyMarketHandles;
+  coreVault: VaultHandles;
+  marketA: MarketHandles;
+  marketB: MarketHandles;
+  curatorVault: PublicKey;
+  curatorBaseEscrow: PublicKey;
+  curatorBaseAta: PublicKey;
+  /** Base ATA for the payer (useful for checking residuals). */
+  payerBaseAta: PublicKey;
+}
+
+/**
+ * Stand up:
+ *   1. base mint (6 decimals)
+ *   2. SY market over base
+ *   3. core vault over SY
+ *   4. TWO core markets (seed_id=1, seed_id=2) under the vault
+ *   5. curator vault over base, keyed to `curatorKp`
+ *   6. base_escrow funded with `curatorBaseSeed`
+ *
+ * The caller still needs to `set_allocations` on the curator vault
+ * before a `reallocate_to_market` can land — we don't do that here
+ * because the allocation weight/cap is test-specific.
+ */
+export async function buildCuratorStackTwoMarkets(
+  params: CuratorStackParams
+): Promise<CuratorStack> {
+  const {
+    core,
+    adapter,
+    curator,
+    connection,
+    payer,
+    curatorKp,
+    startTimestamp,
+    duration,
+    interestBpsFee = 100,
+    creatorFeeBps = 500,
+    feeTreasurySyBps = 200,
+    lnFeeRateRoot = 0.001,
+    rateScalarRoot = 1.0,
+    initRateAnchor = 1.05,
+    curatorBaseSeed = 1_000_000_000n,
+    ptInit = 1_000_000,
+    syInit = 1_000_000,
+  } = params;
+
+  // 1. base mint
+  const baseMint = await createBaseMint(connection, payer, 6);
+
+  // 2. SY market
+  const sy = await createSyMarket({
+    program: adapter,
+    payer,
+    authority: payer,
+    baseMint,
+    initialExchangeRate: new anchor.BN(1),
+  });
+
+  // 3. core vault (requires payer to hold SY for seeding the markets)
+  const payerBaseAta = await createAta(connection, payer, baseMint, payer.publicKey);
+  await mintToUser(
+    connection,
+    payer,
+    baseMint,
+    payer,
+    payerBaseAta.address,
+    10_000_000_000n
+  );
+  const payerSyAta = await mintSyForUser({
+    program: adapter,
+    connection,
+    user: payer,
+    handles: sy,
+    amountBase: new anchor.BN(5_000_000_000),
+  });
+
+  const coreVault = await setupVault({
+    core,
+    adapter,
+    connection,
+    payer,
+    curator: curatorKp.publicKey,
+    syHandles: sy,
+    startTimestamp,
+    duration,
+    interestBpsFee,
+    creatorFeeBps,
+    maxPySupply: new anchor.BN("1000000000000"),
+    minOpSizeStrip: new anchor.BN(1),
+    minOpSizeMerge: new anchor.BN(1),
+  });
+
+  // Seed PT for market init — strip enough SY into PT+YT.
+  const payerPtAta = await getOrCreateAssociatedTokenAccount(
+    connection,
+    payer,
+    coreVault.mintPt,
+    payer.publicKey
+  );
+  const payerYtAta = await getOrCreateAssociatedTokenAccount(
+    connection,
+    payer,
+    coreVault.mintYt,
+    payer.publicKey
+  );
+  await stripWithGenericAdapter({
+    core,
+    adapter,
+    depositor: payer,
+    sy,
+    vault: coreVault,
+    sySrc: payerSyAta,
+    ptDst: payerPtAta.address,
+    ytDst: payerYtAta.address,
+    amount: new anchor.BN(20_000_000),
+  });
+
+  // 4. two markets
+  const marketA = await setupMarket({
+    core,
+    adapter,
+    connection,
+    payer,
+    curator: curatorKp.publicKey,
+    vaultHandles: coreVault,
+    syHandles: sy,
+    seedId: 1,
+    ptInit: new anchor.BN(ptInit),
+    syInit: new anchor.BN(syInit),
+    syExchangeRate: new anchor.BN(1),
+    lnFeeRateRoot,
+    rateScalarRoot,
+    initRateAnchor,
+    feeTreasurySyBps,
+    creatorFeeBps,
+    ptSrc: payerPtAta.address,
+    sySrc: payerSyAta,
+  });
+  const marketB = await setupMarket({
+    core,
+    adapter,
+    connection,
+    payer,
+    curator: curatorKp.publicKey,
+    vaultHandles: coreVault,
+    syHandles: sy,
+    seedId: 2,
+    ptInit: new anchor.BN(ptInit),
+    syInit: new anchor.BN(syInit),
+    syExchangeRate: new anchor.BN(1),
+    lnFeeRateRoot,
+    rateScalarRoot,
+    initRateAnchor,
+    feeTreasurySyBps,
+    creatorFeeBps,
+    ptSrc: payerPtAta.address,
+    sySrc: payerSyAta,
+  });
+
+  // 5. curator vault
+  const [curatorVault] = findCuratorVault(
+    curatorKp.publicKey,
+    baseMint,
+    curator.programId
+  );
+  const [curatorBaseEscrow] = findBaseEscrow(curatorVault, curator.programId);
+  const curatorBaseAta = (
+    await getOrCreateAssociatedTokenAccount(
+      connection,
+      payer,
+      baseMint,
+      curatorKp.publicKey
+    )
+  ).address;
+
+  await (curator.methods as any)
+    .initializeVault(500) // 5% perf fee by default
+    .accounts({
+      payer: payer.publicKey,
+      curator: curatorKp.publicKey,
+      baseMint,
+      vault: curatorVault,
+      baseEscrow: curatorBaseEscrow,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      rent: SYSVAR_RENT_PUBKEY,
+    } as any)
+    .signers([payer])
+    .rpc();
+
+  // 6. seed base into the curator's base_escrow via a regular deposit.
+  // Mint base to the curator's own ATA, then deposit via the curator's
+  // deposit ix so the share accounting stays consistent.
+  await mintToUser(connection, payer, baseMint, payer, curatorBaseAta, curatorBaseSeed);
+  const [curatorDepositPos] = findUserPos(
+    curatorVault,
+    curatorKp.publicKey,
+    curator.programId
+  );
+  await (curator.methods as any)
+    .deposit(new anchor.BN(curatorBaseSeed.toString()))
+    .accounts({
+      owner: curatorKp.publicKey,
+      vault: curatorVault,
+      baseMint,
+      baseSrc: curatorBaseAta,
+      baseEscrow: curatorBaseEscrow,
+      position: curatorDepositPos,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      rent: SYSVAR_RENT_PUBKEY,
+    } as any)
+    .signers([curatorKp])
+    .rpc();
+
+  return {
+    curatorKp,
+    baseMint,
+    sy,
+    coreVault,
+    marketA,
+    marketB,
+    curatorVault,
+    curatorBaseEscrow,
+    curatorBaseAta,
+    payerBaseAta: payerBaseAta.address,
+  };
 }
 
 export { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID };

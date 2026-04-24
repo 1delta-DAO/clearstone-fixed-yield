@@ -13,22 +13,30 @@ this repo ships as **Clearstone**.
 ```
 programs/
   clearstone_core/         the trusted core. permissionless init,
-                           ~21 instructions, curator-gated modify paths.
+                           curator-gated modify paths, flash-swap ixn.
 
 reference_adapters/
   generic_exchange_rate_sy/ reference SY adapter — SPL mint + pokable
                             exchange rate with ATH monotonicity enforced.
-  malicious_sy_nonsense/    test-only mock that returns garbage SyState
-                            so we can exercise validate_sy_state.
+  kamino_sy_adapter/        Kamino Lend SY wrapper (real yield source).
+  malicious_sy_nonsense/    test-only: returns garbage SyState to
+                            exercise validate_sy_state.
+  malicious_sy_reentrant/   test-only: reentrant deposit_sy to exercise
+                            the guard byte.
+  mock_klend/               test-only: minimal Kamino Lend mock.
+  mock_flash_callback/      test-only: flash-swap callback mock.
 
 periphery/
-  clearstone_router/       base-asset UX wrappers (base ↔ SY via
-                           adapter CPIs around core primitives).
-  clearstone_rewards/      LP staking + farm emissions.
-  clearstone_curator/      MetaMorpho-analog super-vault.
+  clearstone_router/         base-asset UX wrappers (base ↔ SY via
+                             adapter CPIs around core primitives).
+  clearstone_rewards/        LP staking + farm emissions.
+  clearstone_curator/        MetaMorpho-analog super-vault.
+  clearstone_solver_callback/ intent-settlement callback for
+                              clearstone_fusion flash fills.
 
-libraries/                 inherited from upstream Exponent.
+libraries/                 math + sy-common types.
 tests/                     fixtures + integration suite.
+scripts/clearstone_pt_solver/ off-chain PT solver for fusion intents.
 ```
 
 ## Read order
@@ -37,6 +45,8 @@ tests/                     fixtures + integration suite.
   data flows.
 - **[CURATOR_GUIDE.md](CURATOR_GUIDE.md)** — step-by-step for
   creating and running a market.
+- **[DEPLOY.md](DEPLOY.md)** — cross-repo deployment order + IDs +
+  post-deploy verification.
 - **[INVARIANTS.md](INVARIANTS.md)** — formal safety properties + code
   mapping.
 - **[INTERFACE.md](INTERFACE.md)** — public instruction catalogue with
@@ -46,14 +56,19 @@ tests/                     fixtures + integration suite.
   closure notes.
 - **[PLAN.md](PLAN.md)** — original design doc and milestone plan.
 
-## Program IDs (localnet)
+## Program IDs
+
+Pinned IDs for all three repos (clearstone-finance / clearstone-fusion-protocol
+/ clearstone-fixed-yield) are documented in [DEPLOY.md](DEPLOY.md). The
+clearstone-fixed-yield-owned programs are:
 
 - `clearstone_core`: `EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC`
 - `generic_exchange_rate_sy`: `DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6`
-- `malicious_sy_nonsense` (tests only): `jEsn9RSpNmmG8tFTo6TjYM8WxVyP9p6sBVGLbHZxZJs`
+- `kamino_sy_adapter`: `29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd`
+- `clearstone_router`: `DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW`
 - `clearstone_rewards`: `7ddrynBQiCNjxejxRwxvSbDb56k8F8Yp4KwYgfiaHX8g`
 - `clearstone_curator`: `831zw8r2fGwRB1QpuRU3gZHZBFYYHBHeG7RbKUz9ssGm`
-- `clearstone_router`: `DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW`
+- `clearstone_solver_callback`: `27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP`
 
 No mainnet deployment yet.
 

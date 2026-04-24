@@ -379,21 +379,25 @@ Coverage by category:
   blocks both recursions. Third case: double-strip on the generic
   adapter proves the guard clears after a successful ix.
 
-## M5 — Reference adapter runtime-untested
+## ✅ M5 — Reference adapter runtime-exercised (**RESOLVED**)
 
-Adapter compiles and now enforces ATH monotonicity. Still not exercised
-at runtime (blocked by the M6 harness). Known gaps documented inline:
+`generic_exchange_rate_sy` is now driven end-to-end by all 20
+integration tests — mint_sy, redeem_sy, deposit_sy, withdraw_sy,
+get_sy_state, init_personal_account, poke_exchange_rate all
+exercised. Second reference adapter (`kamino_sy_adapter`) lands
+beside it for real-yield integration; `mock_klend` backs its tests.
 
-- **Account-order convention for `cpi_accounts`**: core's
-  [CpiAccounts](programs/clearstone_core/src/state/cpi_common.rs)
-  configures which accounts get passed to each SY CPI. Vault/market
-  creators have to wire this up to match the adapter's
-  `#[derive(Accounts)]` order. No tooling yet.
+Known design choices documented for curators in
+[CURATOR_GUIDE.md](CURATOR_GUIDE.md) Phase 4-5:
+
+- **Account-order convention for `cpi_accounts`**: `buildAdapterCpiAccounts`
+  in [tests/fixtures.ts](tests/fixtures.ts) is the canonical example;
+  curators building production SY adapters mirror that shape.
 - **Separate base_vault and pool_escrow**: mint_sy/redeem_sy use
-  `base_vault`; deposit_sy/withdraw_sy use `pool_escrow`. Intentional
-  (the two flows hold different assets), but worth spelling out to
-  curators.
-- **No supply cap / emissions**: out of scope for this reference.
+  `base_vault`; deposit_sy/withdraw_sy use `pool_escrow`. Intentional.
+- **No supply cap / emissions**: out of scope for the generic ref.
+  Yield-bearing adapters (kamino_sy_adapter, future marginfi/jito
+  ports) implement those.
 
 ## ✅ M4 — Periphery programs: router (**RESOLVED**)
 

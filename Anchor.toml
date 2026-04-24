@@ -45,34 +45,36 @@ test = "yarn run mocha --import=tsx --timeout 1000000 tests/**/*.ts"
 # Clone the Metaplex Token Metadata program from mainnet into the
 # local test validator — `initialize_vault` invokes it to create PT
 # metadata and it's not part of the bare `solana-test-validator`
-# image. First `anchor test` run with this block present will fetch
-# it from the cluster below.
+# image. Metaplex is the only clone that's needed for the Step 2
+# test suites; pulling it from mainnet is fast and not rate-limited.
 [[test.validator.clone]]
 address = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
 
-# Clone the clearstone-finance KYC stack (devnet) so the GovernorWhitelist
-# integration test in tests/clearstone-kyc-pass-through.ts can exercise the
-# real governor.add_participant_via_pool → delta_mint.add_escrow_with_co_authority
-# chain. Pinned to the M-KYC-0 release program ids.
-[[test.validator.clone]]
-address = "BKprvLqNUDCGrpxddppHHQ3UBhof8J5axyexDyctX1xy" # delta_mint
+# TEMP (2026-04-24): devnet-only clones disabled because
+# api.devnet.solana.com rate-limits this IP aggressively and the
+# validator's clone-fetch retries burn through that budget before
+# tests can start. These are only needed by
+# tests/clearstone-kyc-pass-through.ts and
+# tests/clearstone-fusion-flash.ts — neither of which is required
+# for Step 2 coverage (curator / rewards / router / core). Re-enable
+# after moving them behind an API-keyed RPC or copying the program
+# binaries into target/deploy/.
+# [[test.validator.clone]]
+# address = "BKprvLqNUDCGrpxddppHHQ3UBhof8J5axyexDyctX1xy" # delta_mint
+# [[test.validator.clone]]
+# address = "6xqW3D1ebp5WjbYh4vwar7ponxrpEaQiVG6uhBYVZtJi" # governor
+# [[test.validator.clone]]
+# address = "gatem74V238djXdzWnJf94Wo1DcnuGkfijbf3AuBhfs"
+# [[test.validator.clone]]
+# address = "9ShSnLUcWeg5BZzokj8mdo9cNHARCKa42kwmqSdBNM6J" # clearstone_fusion
+# [[test.validator.clone]]
+# address = "27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP" # clearstone_solver_callback
 
-[[test.validator.clone]]
-address = "6xqW3D1ebp5WjbYh4vwar7ponxrpEaQiVG6uhBYVZtJi" # governor
-
-# Clone Civic Gateway program (delta-mint confidential-transfer requires it
-# for self-registration paths exercised by governor::self_register).
-[[test.validator.clone]]
-address = "gatem74V238djXdzWnJf94Wo1DcnuGkfijbf3AuBhfs"
-
-# Clone clearstone-fusion + the reference flash-fill callback so the fusion
-# flash e2e test in tests/clearstone-fusion-flash.ts can settle a signed
-# OrderConfig through core.flash_swap_pt → callback → fusion.fill.
-[[test.validator.clone]]
-address = "9ShSnLUcWeg5BZzokj8mdo9cNHARCKa42kwmqSdBNM6J" # clearstone_fusion
-
-[[test.validator.clone]]
-address = "27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP" # clearstone_solver_callback
-
+# Mainnet URL for the Metaplex clone above. Not rate-limited for the
+# single program fetch we need at validator startup.
 [test.validator]
-url = "https://api.devnet.solana.com"
+url = "https://api.mainnet-beta.solana.com"
+bind_address = "127.0.0.1"
+
+[test]
+startup_wait = 60000

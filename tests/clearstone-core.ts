@@ -68,6 +68,15 @@ const core = anchor.workspace.clearstoneCore as Program<ClearstoneCore>;
 const nonsense = anchor.workspace.maliciousSyNonsense as Program<MaliciousSyNonsense>;
 const reentrant = anchor.workspace.maliciousSyReentrant as Program<MaliciousSyReentrant>;
 
+// Validator warmup: solana-test-validator's preflight simulation
+// endpoint lags its confirmed cursor on the very first RPC of a run —
+// the FIRST freshStack hits an "Instruction references an unknown
+// account" flake inside initialize_vault. A no-op createMint gives
+// the validator a cycle to catch up before any real test tx lands.
+before(async () => {
+  await createMint(provider.connection, payer, payer.publicKey, null, 6);
+});
+
 // ===== Full-stack fixture =====
 
 interface Stack {

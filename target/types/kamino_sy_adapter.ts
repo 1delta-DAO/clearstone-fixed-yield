@@ -15,6 +15,9 @@ export type KaminoSyAdapter = {
   "instructions": [
     {
       "name": "claimEmission",
+      "docs": [
+        "No-op; this adapter has no emissions. Placeholder for interface parity."
+      ],
       "discriminator": [
         8
       ],
@@ -36,6 +39,9 @@ export type KaminoSyAdapter = {
     },
     {
       "name": "depositSy",
+      "docs": [
+        "User deposits SY into adapter's pool escrow and credits their position."
+      ],
       "discriminator": [
         5
       ],
@@ -84,6 +90,9 @@ export type KaminoSyAdapter = {
     },
     {
       "name": "getPosition",
+      "docs": [
+        "Read-only: position data."
+      ],
       "discriminator": [
         10
       ],
@@ -104,6 +113,9 @@ export type KaminoSyAdapter = {
     },
     {
       "name": "getSyState",
+      "docs": [
+        "Read-only SyState. Exchange rate read from klend reserve."
+      ],
       "discriminator": [
         7
       ],
@@ -124,6 +136,9 @@ export type KaminoSyAdapter = {
     },
     {
       "name": "initPersonalAccount",
+      "docs": [
+        "Create a PersonalPosition for `owner` on this SY market."
+      ],
       "discriminator": [
         3
       ],
@@ -151,6 +166,12 @@ export type KaminoSyAdapter = {
     },
     {
       "name": "initSyParams",
+      "docs": [
+        "Create SY parameters: new SY mint, collateral vault (holds ctokens), SY pool escrow.",
+        "When kyc_mode is GovernorWhitelist, the caller passes",
+        "`core_pdas_to_whitelist: Vec<Pubkey>` and paired `[wallet, whitelist_entry]` accounts",
+        "via remaining_accounts; the adapter CPIs governor once per PDA."
+      ],
       "discriminator": [
         0
       ],
@@ -162,6 +183,10 @@ export type KaminoSyAdapter = {
         },
         {
           "name": "curator",
+          "docs": [
+            "Curator is the caller authorizing the init. When kyc_mode is GovernorWhitelist",
+            "they must be a governor root/admin — enforced by the governor CPI in M-KYC-3."
+          ],
           "signer": true
         },
         {
@@ -177,14 +202,23 @@ export type KaminoSyAdapter = {
         },
         {
           "name": "collateralVault",
+          "docs": [
+            "Adapter-owned vault holding klend ctokens. SY supply tracks this 1:1."
+          ],
           "writable": true
         },
         {
           "name": "poolEscrow",
+          "docs": [
+            "Pool escrow for deposit_sy / withdraw_sy flow."
+          ],
           "writable": true
         },
         {
-          "name": "klendReserve"
+          "name": "klendReserve",
+          "docs": [
+            "downstream ixs. Here we just store its pubkey."
+          ]
         },
         {
           "name": "klendLendingMarket"
@@ -240,6 +274,10 @@ export type KaminoSyAdapter = {
     },
     {
       "name": "mintSy",
+      "docs": [
+        "Mint SY: user's underlying → klend.deposit_reserve_liquidity → ctokens stored in",
+        "adapter's collateral_vault → adapter mints amount_collateral of SY (1:1) to user."
+      ],
       "discriminator": [
         1
       ],
@@ -303,6 +341,10 @@ export type KaminoSyAdapter = {
     },
     {
       "name": "redeemSy",
+      "docs": [
+        "Redeem SY: burn SY from user → redeem equal ctokens from adapter vault via",
+        "klend.redeem_reserve_collateral → user receives underlying."
+      ],
       "discriminator": [
         2
       ],
@@ -366,6 +408,9 @@ export type KaminoSyAdapter = {
     },
     {
       "name": "withdrawSy",
+      "docs": [
+        "Withdraw SY from pool escrow back to owner."
+      ],
       "discriminator": [
         6
       ],
@@ -438,21 +483,6 @@ export type KaminoSyAdapter = {
         91,
         34,
         91
-      ]
-    }
-  ],
-  "events": [
-    {
-      "name": "whitelistRequestedEvent",
-      "discriminator": [
-        122,
-        231,
-        26,
-        85,
-        206,
-        238,
-        84,
-        186
       ]
     }
   ],
@@ -547,6 +577,9 @@ export type KaminoSyAdapter = {
     },
     {
       "name": "kycMode",
+      "docs": [
+        "KYC configuration stored on SyMetadata."
+      ],
       "type": {
         "kind": "enum",
         "variants": [
@@ -599,6 +632,9 @@ export type KaminoSyAdapter = {
     },
     {
       "name": "number",
+      "docs": [
+        "High precision number, stored as 4 u64 words in little endian"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -755,30 +791,6 @@ export type KaminoSyAdapter = {
                 }
               }
             }
-          }
-        ]
-      }
-    },
-    {
-      "name": "whitelistRequestedEvent",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "syMetadata",
-            "type": "pubkey"
-          },
-          {
-            "name": "poolConfig",
-            "type": "pubkey"
-          },
-          {
-            "name": "pdaToWhitelist",
-            "type": "pubkey"
-          },
-          {
-            "name": "whitelistEntry",
-            "type": "pubkey"
           }
         ]
       }

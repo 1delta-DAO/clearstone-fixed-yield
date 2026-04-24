@@ -1,0 +1,96 @@
+{
+  "cluster": "devnet",
+  "rpcUrl": "https://api.devnet.solana.com",
+  "upgradeLoader": "BPFLoaderUpgradeab1e11111111111111111111111",
+  "upgradeAuthority": "AhKNmBmaeq6XrrEyGnSQne3WeU4SoN7hSAGieTiqPaJX",
+  "lastUpdated": "2026-04-24",
+  "programs": {
+    "clearstone_core": {
+      "programId": "EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC",
+      "status": "live",
+      "tier": 2,
+      "soPath": "target/deploy/clearstone_core.so",
+      "soBytes": 1243120,
+      "deployTx": "648My2i2WHJB4NZroooVz8hY1Wqk6diWmTy1pN4X7rZaHD3UmBVvDVoPJKsXidEAamqUrFQM4QracrJTKixUf33H",
+      "deployedAt": "2026-04-24"
+    },
+    "generic_exchange_rate_sy": {
+      "programId": "DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6",
+      "status": "live",
+      "tier": 2,
+      "soPath": "target/deploy/generic_exchange_rate_sy.so",
+      "soBytes": 395960,
+      "deployTx": "PkEX9V6eBW3C8kxanSQiAPj1YHEk3Lt88mkXqigPewnrw5prNjopuun6BYpbT3ceZwRoKjiizzzAMz624pmTNaj",
+      "deployedAt": "2026-04-24"
+    },
+    "kamino_sy_adapter": {
+      "programId": "29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd",
+      "status": "live",
+      "tier": 2,
+      "soPath": "target/deploy/kamino_sy_adapter.so",
+      "soBytes": 426944,
+      "deployTx": "4QHpetcoQFP39ntyqgvTP2WakMWuMbUHY1SqAJLWvm6BEGYS2YrPqQVZ3Tyik2FFnVe3SWCNqp39KxEde3Jbwxcf",
+      "deployedAt": "2026-04-24"
+    },
+    "clearstone_rewards": {
+      "programId": "7ddrynBQiCNjxejxRwxvSbDb56k8F8Yp4KwYgfiaHX8g",
+      "status": "pending",
+      "tier": 3,
+      "soPath": "target/deploy/clearstone_rewards.so",
+      "soBytes": 437112,
+      "rentEstimateSol": 3.1
+    },
+    "clearstone_router": {
+      "programId": "DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW",
+      "status": "pending",
+      "tier": 3,
+      "soPath": "target/deploy/clearstone_router.so",
+      "soBytes": 609864,
+      "rentEstimateSol": 4.3
+    },
+    "clearstone_curator": {
+      "programId": "831zw8r2fGwRB1QpuRU3gZHZBFYYHBHeG7RbKUz9ssGm",
+      "status": "pending",
+      "tier": 3,
+      "soPath": "target/deploy/clearstone_curator.so",
+      "soBytes": 708600,
+      "rentEstimateSol": 5.0
+    },
+    "clearstone_solver_callback": {
+      "programId": "27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP",
+      "status": "not_built",
+      "tier": 3,
+      "soPath": null,
+      "soBytes": null,
+      "rentEstimateSol": null
+    },
+    "mock_klend": {
+      "programId": "AKeo9L8sGnMABrsUs7gJAk8WLye62hSJ7ikZ6yytCGkv",
+      "status": "skip",
+      "tier": "test-only"
+    },
+    "mock_flash_callback": {
+      "programId": "9AduMJSRv79G5UBrj3WZCK1KzpzmZ4zAKV4Mud4Z4hvF",
+      "status": "skip",
+      "tier": "test-only"
+    },
+    "malicious_sy_nonsense": {
+      "programId": "jEsn9RSpNmmG8tFTo6TjYM8WxVyP9p6sBVGLbHZxZJs",
+      "status": "skip",
+      "tier": "test-only"
+    },
+    "malicious_sy_reentrant": {
+      "programId": "FNh2bhq9exxygNfJTd2ZCmUubB5Tdk51D5od2NLKCsv8",
+      "status": "skip",
+      "tier": "test-only"
+    }
+  },
+  "summary": {
+    "live": 3,
+    "pending": 3,
+    "notBuilt": 1,
+    "skipTestOnly": 4,
+    "remainingRentSolEstimate": 12.4,
+    "note": "Tier 3 needs ~12.4 SOL rent (rewards + router + curator) + solver_callback once built. Tx fees add ~0.1 SOL per program. For programs >400 KB, use the separated strategy: `solana program write-buffer --buffer <kp> --max-sign-attempts 60 --use-rpc --with-compute-unit-price 200000` (retryable), then `solana program deploy --buffer <kp> --program-id <program-kp>`. Devnet RPC frequently drops the inline `deploy` flow for programs >1 MB."
+  }
+}

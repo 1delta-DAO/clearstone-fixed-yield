@@ -132,6 +132,10 @@ pub mod clearstone_curator {
     pub fn withdraw(ctx: Context<Withdraw>, shares: u64) -> Result<()> {
         require!(shares > 0, CuratorError::ZeroAmount);
 
+        // Clone the AccountInfo handle BEFORE taking &mut on ctx.accounts.vault
+        // so the transfer CPI further down can still pass `vault` as authority
+        // without re-borrowing while `v` is live.
+        let vault_ai = ctx.accounts.vault.to_account_info();
         let v = &mut ctx.accounts.vault;
         let pos = &mut ctx.accounts.position;
 
@@ -163,10 +167,17 @@ pub mod clearstone_curator {
             .checked_sub(assets_out)
             .ok_or(CuratorError::InsufficientAssets)?;
 
-        // Transfer base from escrow PDA to user.
-        let vault_key = v.key();
-        let bump = [ctx.bumps.base_escrow];
-        let seeds: &[&[&[u8]]] = &[&[BASE_ESCROW_SEED, vault_key.as_ref(), &bump]];
+        // Transfer base from escrow (owned by vault PDA) to user — vault
+        // signs. Must match `base_escrow`'s authority pinned at init.
+        let curator_key = v.curator;
+        let base_mint_key = v.base_mint;
+        let bump = [v.bump];
+        let seeds: &[&[&[u8]]] = &[&[
+            CURATOR_VAULT_SEED,
+            curator_key.as_ref(),
+            base_mint_key.as_ref(),
+            &bump,
+        ]];
         transfer_checked(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
@@ -174,7 +185,7 @@ pub mod clearstone_curator {
                     from: ctx.accounts.base_escrow.to_account_info(),
                     mint: ctx.accounts.base_mint.to_account_info(),
                     to: ctx.accounts.base_dst.to_account_info(),
-                    authority: ctx.accounts.base_escrow.to_account_info(),
+                    authority: vault_ai,
                 },
                 seeds,
             ),
@@ -1199,7 +1210,12 @@ pub struct InitializeVault<'info> {
         seeds = [BASE_ESCROW_SEED, vault.key().as_ref()],
         bump,
         token::mint = base_mint,
-        token::authority = base_escrow,
+        // Owner = the vault PDA so the vault can sign `transfer` from
+        // base_escrow in both the user-withdraw path AND the
+        // reallocate_to_market adapter CPI (mint_sy requires
+        // `base_src.owner == owner`). Using `= base_escrow` here
+        // self-authors the escrow and breaks the reallocate path.
+        token::authority = vault,
     )]
     pub base_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
 

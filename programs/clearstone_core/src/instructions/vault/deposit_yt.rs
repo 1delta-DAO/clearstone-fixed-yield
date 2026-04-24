@@ -24,6 +24,8 @@ pub struct DepositYt<'info> {
     pub depositor: Signer<'info>,
 
     /// Vault that manages YT
+    // Boxed to keep `try_accounts` under the 4096-byte BPF stack cap;
+    // anchor-build warned about this struct specifically.
     #[account(
         mut,
         has_one = sy_program,
@@ -31,7 +33,7 @@ pub struct DepositYt<'info> {
         has_one = address_lookup_table,
         has_one = yield_position
     )]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
 
     /// Position data for YT deposits, linked to vault
     #[account(

@@ -15,20 +15,23 @@ pub struct CollectEmission<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
 
+    // Vault + position + the 3 InterfaceAccounts are Boxed to fit the
+    // 4096-byte BPF stack cap on try_accounts. See trade_pt.rs for the
+    // underlying BPF-stack rationale.
     #[account(
         mut,
         has_one = authority,
         has_one = address_lookup_table,
         has_one = sy_program,
     )]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
 
     #[account(
         mut,
         has_one = owner,
         has_one = vault
     )]
-    pub position: Account<'info, YieldTokenPosition>,
+    pub position: Box<Account<'info, YieldTokenPosition>>,
 
     /// CHECK: constrained by vault
     pub sy_program: UncheckedAccount<'info>,
@@ -40,10 +43,10 @@ pub struct CollectEmission<'info> {
         mut,
         address = vault.emissions[index as usize].token_account,
     )]
-    pub emission_escrow: InterfaceAccount<'info, TokenAccount>,
+    pub emission_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(mut)]
-    pub emission_dst: InterfaceAccount<'info, TokenAccount>,
+    pub emission_dst: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// CHECK: constrained by vault
     pub address_lookup_table: UncheckedAccount<'info>,
@@ -52,7 +55,7 @@ pub struct CollectEmission<'info> {
         mut,
         address = vault.emissions[index as usize].treasury_token_account,
     )]
-    pub treasury_emission_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub treasury_emission_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// CHECK: constrained by token accounts
     pub token_program: Interface<'info, TokenInterface>,

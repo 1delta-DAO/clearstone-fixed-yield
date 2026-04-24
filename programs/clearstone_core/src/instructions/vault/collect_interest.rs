@@ -33,6 +33,7 @@ pub struct CollectInterest<'info> {
     pub yield_position: Box<Account<'info, YieldTokenPosition>>,
 
     /// The vault that holds the SY tokens in escrow
+    // Boxed — try_accounts frame overflows without it. See trade_pt.rs.
     #[account(
         mut,
         has_one = authority,
@@ -42,14 +43,14 @@ pub struct CollectInterest<'info> {
         has_one = sy_program,
         has_one = mint_sy,
     )]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
 
     /// The receiving token account for SY withdrawn
     #[account(mut, token::mint = mint_sy)]
-    pub token_sy_dst: InterfaceAccount<'info, TokenAccount>,
+    pub token_sy_dst: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(mut, token::mint = mint_sy)]
-    pub escrow_sy: InterfaceAccount<'info, TokenAccount>,
+    pub escrow_sy: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// CHECK: constrained by vault
     #[account(mut)]
@@ -61,7 +62,7 @@ pub struct CollectInterest<'info> {
     pub sy_program: UncheckedAccount<'info>,
 
     #[account(mut, token::mint = mint_sy)]
-    pub treasury_sy_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub treasury_sy_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// CHECK: constrained by vault
     pub address_lookup_table: UncheckedAccount<'info>,

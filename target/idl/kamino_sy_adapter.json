@@ -9,6 +9,9 @@
   "instructions": [
     {
       "name": "claim_emission",
+      "docs": [
+        "No-op; this adapter has no emissions. Placeholder for interface parity."
+      ],
       "discriminator": [
         8
       ],
@@ -30,6 +33,9 @@
     },
     {
       "name": "deposit_sy",
+      "docs": [
+        "User deposits SY into adapter's pool escrow and credits their position."
+      ],
       "discriminator": [
         5
       ],
@@ -78,6 +84,9 @@
     },
     {
       "name": "get_position",
+      "docs": [
+        "Read-only: position data."
+      ],
       "discriminator": [
         10
       ],
@@ -98,6 +107,9 @@
     },
     {
       "name": "get_sy_state",
+      "docs": [
+        "Read-only SyState. Exchange rate read from klend reserve."
+      ],
       "discriminator": [
         7
       ],
@@ -118,6 +130,9 @@
     },
     {
       "name": "init_personal_account",
+      "docs": [
+        "Create a PersonalPosition for `owner` on this SY market."
+      ],
       "discriminator": [
         3
       ],
@@ -145,6 +160,12 @@
     },
     {
       "name": "init_sy_params",
+      "docs": [
+        "Create SY parameters: new SY mint, collateral vault (holds ctokens), SY pool escrow.",
+        "When kyc_mode is GovernorWhitelist, the caller passes",
+        "`core_pdas_to_whitelist: Vec<Pubkey>` and paired `[wallet, whitelist_entry]` accounts",
+        "via remaining_accounts; the adapter CPIs governor once per PDA."
+      ],
       "discriminator": [
         0
       ],
@@ -156,6 +177,10 @@
         },
         {
           "name": "curator",
+          "docs": [
+            "Curator is the caller authorizing the init. When kyc_mode is GovernorWhitelist",
+            "they must be a governor root/admin — enforced by the governor CPI in M-KYC-3."
+          ],
           "signer": true
         },
         {
@@ -171,14 +196,23 @@
         },
         {
           "name": "collateral_vault",
+          "docs": [
+            "Adapter-owned vault holding klend ctokens. SY supply tracks this 1:1."
+          ],
           "writable": true
         },
         {
           "name": "pool_escrow",
+          "docs": [
+            "Pool escrow for deposit_sy / withdraw_sy flow."
+          ],
           "writable": true
         },
         {
-          "name": "klend_reserve"
+          "name": "klend_reserve",
+          "docs": [
+            "downstream ixs. Here we just store its pubkey."
+          ]
         },
         {
           "name": "klend_lending_market"
@@ -234,6 +268,10 @@
     },
     {
       "name": "mint_sy",
+      "docs": [
+        "Mint SY: user's underlying → klend.deposit_reserve_liquidity → ctokens stored in",
+        "adapter's collateral_vault → adapter mints amount_collateral of SY (1:1) to user."
+      ],
       "discriminator": [
         1
       ],
@@ -297,6 +335,10 @@
     },
     {
       "name": "redeem_sy",
+      "docs": [
+        "Redeem SY: burn SY from user → redeem equal ctokens from adapter vault via",
+        "klend.redeem_reserve_collateral → user receives underlying."
+      ],
       "discriminator": [
         2
       ],
@@ -360,6 +402,9 @@
     },
     {
       "name": "withdraw_sy",
+      "docs": [
+        "Withdraw SY from pool escrow back to owner."
+      ],
       "discriminator": [
         6
       ],
@@ -432,21 +477,6 @@
         91,
         34,
         91
-      ]
-    }
-  ],
-  "events": [
-    {
-      "name": "WhitelistRequestedEvent",
-      "discriminator": [
-        122,
-        231,
-        26,
-        85,
-        206,
-        238,
-        84,
-        186
       ]
     }
   ],
@@ -541,6 +571,9 @@
     },
     {
       "name": "KycMode",
+      "docs": [
+        "KYC configuration stored on SyMetadata."
+      ],
       "type": {
         "kind": "enum",
         "variants": [
@@ -593,6 +626,9 @@
     },
     {
       "name": "Number",
+      "docs": [
+        "High precision number, stored as 4 u64 words in little endian"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -749,30 +785,6 @@
                 }
               }
             }
-          }
-        ]
-      }
-    },
-    {
-      "name": "WhitelistRequestedEvent",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "sy_metadata",
-            "type": "pubkey"
-          },
-          {
-            "name": "pool_config",
-            "type": "pubkey"
-          },
-          {
-            "name": "pda_to_whitelist",
-            "type": "pubkey"
-          },
-          {
-            "name": "whitelist_entry",
-            "type": "pubkey"
           }
         ]
       }

@@ -26,6 +26,7 @@ import {
   findLpEscrow,
   findStakePosition,
   sleep,
+  advanceClock,
 } from "./fixtures";
 
 import type { ClearstoneRewards } from "../target/types/clearstone_rewards";
@@ -220,6 +221,118 @@ describe("clearstone-rewards :: stake + claim", () => {
     expect(pos.stakedAmount.toString()).to.equal("500000");
     const escrow = await getAccount(provider.connection, fix.lpEscrow);
     expect(escrow.amount.toString()).to.equal("500000");
+  });
+
+  it("claim_farm_emission transfers accrued rewards after clock advance", async () => {
+    const fix = await buildFarm();
+    const now = Math.floor(Date.now() / 1000);
+    // Emit 1000 reward tokens per second. With a 5s advance we expect
+    // ≈5000 reward tokens accrued to the sole staker.
+    await addDefaultFarm(fix, { tokenRate: 1000, expiryTimestamp: now + 3600 });
+
+    // Fund the reward escrow so claim has something to pay out.
+    const curatorRewardAta = (
+      await getOrCreateAssociatedTokenAccount(
+        provider.connection,
+        payer,
+        fix.rewardMint,
+        fix.curatorKp.publicKey
+      )
+    ).address;
+    await mintTo(
+      provider.connection,
+      payer,
+      fix.rewardMint,
+      curatorRewardAta,
+      payer,
+      1_000_000n
+    );
+    await rewards.methods
+      .refillFarm(new BN(100_000))
+      .accounts({
+        curator: fix.curatorKp.publicKey,
+        farmState: fix.farmState,
+        rewardMint: fix.rewardMint,
+        rewardSrc: curatorRewardAta,
+        rewardEscrow: fix.rewardEscrow,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      } as any)
+      .signers([fix.curatorKp])
+      .rpc();
+
+    // Stake 1000 LP — this also bumps `last_update_ts` so emission
+    // accrual starts from here.
+    const user = await fundedUser();
+    const lpSrc = (
+      await getOrCreateAssociatedTokenAccount(
+        provider.connection,
+        payer,
+        fix.lpMint,
+        user.publicKey
+      )
+    ).address;
+    await mintTo(
+      provider.connection,
+      payer,
+      fix.lpMint,
+      lpSrc,
+      payer,
+      1_000_000n
+    );
+    const [stakePos] = findStakePosition(fix.farmState, user.publicKey, rewards.programId);
+    await rewards.methods
+      .stakeLp(new BN(1000))
+      .accounts({
+        owner: user.publicKey,
+        farmState: fix.farmState,
+        lpMint: fix.lpMint,
+        lpSrc,
+        lpEscrow: fix.lpEscrow,
+        position: stakePos,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+      } as any)
+      .signers([user])
+      .rpc();
+
+    // Let the on-chain Clock move forward at least 3 seconds. Accrual
+    // index = token_rate * dt / total_staked = 1000 * dt / 1000 = dt
+    // reward tokens per LP — user holds 1000 LP → ~1000 * dt claimable.
+    const advanced = await advanceClock(provider.connection, 3);
+    expect(advanced).to.be.greaterThanOrEqual(3);
+
+    const rewardDst = (
+      await getOrCreateAssociatedTokenAccount(
+        provider.connection,
+        payer,
+        fix.rewardMint,
+        user.publicKey
+      )
+    ).address;
+    const dstBefore = (await getAccount(provider.connection, rewardDst)).amount;
+    await rewards.methods
+      .claimFarmEmission()
+      .accounts({
+        owner: user.publicKey,
+        farmState: fix.farmState,
+        position: stakePos,
+        rewardMint: fix.rewardMint,
+        rewardEscrow: fix.rewardEscrow,
+        rewardDst,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      } as any)
+      .signers([user])
+      .rpc();
+    const dstAfter = (await getAccount(provider.connection, rewardDst)).amount;
+    const received = Number(dstAfter - dstBefore);
+    // Slot jitter: the window between `stake_lp` writing last_update_ts
+    // and `claim_farm_emission` reading Clock::now can be shorter than
+    // the `advanced` delta we observed outside the program (the advance
+    // starts *before* the claim tx confirms). Just require SOME accrual
+    // — correctness of the math is covered in Rust unit tests; this is
+    // a runtime smoke for the CPI path.
+    expect(received).to.be.greaterThan(0);
   });
 
   it("stake → unstake round-trips LP back to the user", async () => {
