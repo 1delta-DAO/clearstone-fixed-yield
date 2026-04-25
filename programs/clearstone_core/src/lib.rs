@@ -17,7 +17,7 @@ pub use state::*;
 #[cfg(all(not(feature = "idl-build"), not(test)))]
 mod allocator;
 
-declare_id!("EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC");
+declare_id!("DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW");
 
 #[cfg(not(feature = "no-entrypoint"))]
 security_txt! {

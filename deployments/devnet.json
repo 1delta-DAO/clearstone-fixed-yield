@@ -6,7 +6,7 @@
   "lastUpdated": "2026-04-24",
   "programs": {
     "clearstone_core": {
-      "programId": "EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC",
+      "programId": "DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW",
       "status": "live",
       "tier": 2,
       "soPath": "target/deploy/clearstone_core.so",
@@ -15,7 +15,7 @@
       "deployedAt": "2026-04-24"
     },
     "generic_exchange_rate_sy": {
-      "programId": "DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6",
+      "programId": "HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3",
       "status": "live",
       "tier": 2,
       "soPath": "target/deploy/generic_exchange_rate_sy.so",

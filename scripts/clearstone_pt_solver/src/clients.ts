@@ -22,7 +22,7 @@ export interface SolverClients {
 
 /** Program ids (mainnet-ish). Override via env for localnet / devnet. */
 const CORE_ID = new PublicKey(
-  process.env.CORE_PROGRAM ?? "EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC"
+  process.env.CORE_PROGRAM ?? "DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW"
 );
 const KAMINO_SY_ID = new PublicKey(
   process.env.KAMINO_SY_PROGRAM ?? "29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd"

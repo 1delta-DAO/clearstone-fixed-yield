@@ -10,7 +10,7 @@ Clearstone's discriminators are **1-byte sequential**, not the Anchor
 default 8-byte hash, because M0 reassigned them for a lean on-chain
 footprint.
 
-Program ID (localnet): `EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC`.
+Program ID (localnet): `DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW`.
 
 ## Instruction catalogue
 
@@ -226,7 +226,7 @@ add cost without adding safety.
 - [generic_exchange_rate_sy](reference_adapters/generic_exchange_rate_sy/src/lib.rs)
   implements the SY interface that core's `utils/sy_cpi.rs` calls. The
   10-discriminator map lives in the adapter's lib.rs header comment.
-  Program ID (localnet): `DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6`.
+  Program ID (localnet): `HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3`.
 - [kamino_sy_adapter](reference_adapters/kamino_sy_adapter/src/lib.rs)
   wraps a Kamino Lend V2 reserve and exposes the same SY interface.
   `init_sy_params` takes a `KycMode { None, GovernorWhitelist { .. } }`

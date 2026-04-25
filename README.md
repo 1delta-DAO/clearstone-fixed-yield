@@ -62,8 +62,8 @@ Pinned IDs for all three repos (clearstone-finance / clearstone-fusion-protocol
 / clearstone-fixed-yield) are documented in [DEPLOY.md](DEPLOY.md). The
 clearstone-fixed-yield-owned programs are:
 
-- `clearstone_core`: `EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC`
-- `generic_exchange_rate_sy`: `DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6`
+- `clearstone_core`: `DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW`
+- `generic_exchange_rate_sy`: `HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3`
 - `kamino_sy_adapter`: `29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd`
 - `clearstone_router`: `DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW`
 - `clearstone_rewards`: `7ddrynBQiCNjxejxRwxvSbDb56k8F8Yp4KwYgfiaHX8g`

@@ -20,8 +20,8 @@ resolution = false
 skip-lint = false
 
 [programs.localnet]
-clearstone_core = "EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC"
-generic_exchange_rate_sy = "DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6"
+clearstone_core = "DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW"
+generic_exchange_rate_sy = "HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3"
 malicious_sy_nonsense = "jEsn9RSpNmmG8tFTo6TjYM8WxVyP9p6sBVGLbHZxZJs"
 malicious_sy_reentrant = "FNh2bhq9exxygNfJTd2ZCmUubB5Tdk51D5od2NLKCsv8"
 mock_klend = "AKeo9L8sGnMABrsUs7gJAk8WLye62hSJ7ikZ6yytCGkv"
@@ -32,12 +32,29 @@ clearstone_curator = "831zw8r2fGwRB1QpuRU3gZHZBFYYHBHeG7RbKUz9ssGm"
 clearstone_router = "DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW"
 clearstone_solver_callback = "27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP"
 
+# Devnet program IDs intentionally match localnet 1:1 so `declare_id!`
+# stays stable across clusters — see DEPLOY_IDS.md. The two test-only
+# mocks (malicious_sy_*) are *not* listed here; they don't ship to devnet.
+[programs.devnet]
+clearstone_core = "DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW"
+generic_exchange_rate_sy = "HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3"
+clearstone_rewards = "7ddrynBQiCNjxejxRwxvSbDb56k8F8Yp4KwYgfiaHX8g"
+clearstone_curator = "831zw8r2fGwRB1QpuRU3gZHZBFYYHBHeG7RbKUz9ssGm"
+clearstone_router = "DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW"
+
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
 cluster = "Localnet"
 wallet = "./testkp.json"
+
+# Devnet provider — selected at `anchor deploy --provider.cluster devnet`
+# time or by sourcing .env.devnet. Wallet path is the dedicated devnet
+# deployer keypair (created via scripts/devnet-deploy-init.sh).
+[provider.devnet]
+cluster = "https://api.devnet.solana.com"
+wallet = "~/.config/solana/clearstone-devnet.json"
 
 [scripts]
 test = "yarn run mocha --import=tsx --timeout 1000000 tests/**/*.ts"

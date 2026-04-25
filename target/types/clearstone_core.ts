@@ -5,7 +5,7 @@
  * IDL can be found at `target/idl/clearstone_core.json`.
  */
 export type ClearstoneCore = {
-  "address": "EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC",
+  "address": "DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW",
   "metadata": {
     "name": "clearstoneCore",
     "version": "0.1.0",

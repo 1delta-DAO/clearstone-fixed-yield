@@ -57,8 +57,8 @@ Pinned. Do not regenerate without cross-repo coordination.
 | delta_mint | `BKprvLqNUDCGrpxddppHHQ3UBhof8J5axyexDyctX1xy` | clearstone-finance |
 | governor | `6xqW3D1ebp5WjbYh4vwar7ponxrpEaQiVG6uhBYVZtJi` | clearstone-finance |
 | clearstone_fusion | `9ShSnLUcWeg5BZzokj8mdo9cNHARCKa42kwmqSdBNM6J` | clearstone-fusion-protocol |
-| clearstone_core | `EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC` | clearstone-fixed-yield |
-| generic_exchange_rate_sy | `DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6` | clearstone-fixed-yield |
+| clearstone_core | `DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW` | clearstone-fixed-yield |
+| generic_exchange_rate_sy | `HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3` | clearstone-fixed-yield |
 | kamino_sy_adapter | `29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd` | clearstone-fixed-yield |
 | clearstone_router | `DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW` | clearstone-fixed-yield |
 | clearstone_rewards | `7ddrynBQiCNjxejxRwxvSbDb56k8F8Yp4KwYgfiaHX8g` | clearstone-fixed-yield |
@@ -186,7 +186,7 @@ address = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
 anchor build -p clearstone_core
 anchor deploy -p clearstone_core --provider.cluster devnet \
   --program-keypair target/deploy/clearstone_core-keypair.json
-anchor idl init EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC \
+anchor idl init DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW \
   --filepath target/idl/clearstone_core.json --provider.cluster devnet
 ```
 
@@ -198,7 +198,7 @@ anchor idl init EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC \
 anchor build -p generic_exchange_rate_sy
 anchor deploy -p generic_exchange_rate_sy --provider.cluster devnet \
   --program-keypair target/deploy/generic_exchange_rate_sy-keypair.json
-anchor idl init DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6 \
+anchor idl init HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3 \
   --filepath target/idl/generic_exchange_rate_sy.json --provider.cluster devnet
 ```
 
@@ -282,8 +282,8 @@ for ID in \
     BKprvLqNUDCGrpxddppHHQ3UBhof8J5axyexDyctX1xy \
     6xqW3D1ebp5WjbYh4vwar7ponxrpEaQiVG6uhBYVZtJi \
     9ShSnLUcWeg5BZzokj8mdo9cNHARCKa42kwmqSdBNM6J \
-    EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC \
-    DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6 \
+    DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW \
+    HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3 \
     29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd \
     DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW \
     7ddrynBQiCNjxejxRwxvSbDb56k8F8Yp4KwYgfiaHX8g \

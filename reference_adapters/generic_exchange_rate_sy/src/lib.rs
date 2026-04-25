@@ -39,7 +39,7 @@ use anchor_spl::token_interface::{
 use precise_number::Number;
 use sy_common::{MintSyReturnData, PositionState, RedeemSyReturnData, SyState};
 
-declare_id!("DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6");
+declare_id!("HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3");
 
 pub const SY_MARKET_SEED: &[u8] = b"sy_market";
 pub const SY_MINT_SEED: &[u8] = b"sy_mint";

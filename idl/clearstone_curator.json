@@ -1162,63 +1162,58 @@
   "errors": [
     {
       "code": 6000,
-      "name": "SlippageTooWide",
-      "msg": "max_slippage_bps exceeds 1000 (10%)"
+      "name": "Unauthorized",
+      "msg": "Unauthorized"
     },
     {
       "code": 6001,
-      "name": "TtlTooShort",
-      "msg": "ttl_slots below minimum (~1 day)"
+      "name": "ZeroAmount",
+      "msg": "Amount must be greater than zero"
     },
     {
       "code": 6002,
-      "name": "TtlTooLong",
-      "msg": "ttl_slots above maximum (~100 days)"
+      "name": "FeeTooHigh",
+      "msg": "Performance fee exceeds 20% cap"
     },
     {
       "code": 6003,
-      "name": "Expired",
-      "msg": "delegation has expired"
+      "name": "WeightsExceedFull",
+      "msg": "Allocation weights exceed 100%"
     },
     {
       "code": 6004,
-      "name": "AllocationsDrifted",
-      "msg": "vault allocations have changed since the user signed"
+      "name": "Overflow",
+      "msg": "Arithmetic overflow"
     },
     {
       "code": 6005,
-      "name": "VaultMismatch",
-      "msg": "delegation vault does not match the vault in the instruction"
+      "name": "NotYetImplemented",
+      "msg": "Not yet implemented"
     },
     {
       "code": 6006,
-      "name": "IndexOOR",
-      "msg": "allocation index out of range"
+      "name": "InsufficientShares",
+      "msg": "Position has fewer shares than requested"
     },
     {
       "code": 6007,
-      "name": "MarketMismatch",
-      "msg": "market PDA does not match the allocation at the given index"
+      "name": "InsufficientAssets",
+      "msg": "Vault escrow has insufficient base liquid; curator must rebalance"
     },
     {
       "code": 6008,
-      "name": "FromMarketNotMatured",
-      "msg": "from_market has not yet reached its expiration timestamp"
+      "name": "AllocationIndexOutOfRange",
+      "msg": "Allocation index out of range for this vault"
     },
     {
       "code": 6009,
-      "name": "SlippageBelowDelegationFloor",
-      "msg": "keeper min_base_out is below the delegation's slippage floor"
+      "name": "AllocationMarketMismatch",
+      "msg": "Market passed does not match the allocation entry"
     },
     {
       "code": 6010,
-      "name": "NothingToRoll",
-      "msg": "allocation has zero deployed_base — nothing to roll"
-    },
-    {
-      "code": 6011,
-      "name": "DeployedBaseDrift",
-      "msg": "vault_lp_ata balance is below the allocation's deployed_base"
+      "name": "AllocationCapExceeded",
+      "msg": "Allocation cap would be exceeded"
     }
   ],
   "types": [

@@ -14,8 +14,8 @@ this order:
 
 Versions / commits at audit kickoff go here when the tag is cut.
 
-- clearstone_core: program ID `EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC`
-- generic_exchange_rate_sy (reference): program ID `DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6`
+- clearstone_core: program ID `DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW`
+- generic_exchange_rate_sy (reference): program ID `HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3`
 - kamino_sy_adapter (reference, KYC pass-through capable): program ID `29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd`
 
 ## In scope

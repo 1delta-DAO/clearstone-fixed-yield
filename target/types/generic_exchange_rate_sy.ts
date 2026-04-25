@@ -5,7 +5,7 @@
  * IDL can be found at `target/idl/generic_exchange_rate_sy.json`.
  */
 export type GenericExchangeRateSy = {
-  "address": "DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6",
+  "address": "HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3",
   "metadata": {
     "name": "genericExchangeRateSy",
     "version": "0.1.0",
