@@ -2,8 +2,10 @@
   "cluster": "devnet",
   "rpcUrl": "https://api.devnet.solana.com",
   "upgradeLoader": "BPFLoaderUpgradeab1e11111111111111111111111",
-  "upgradeAuthority": "AhKNmBmaeq6XrrEyGnSQne3WeU4SoN7hSAGieTiqPaJX",
-  "lastUpdated": "2026-04-24",
+  "upgradeAuthority": "Hro4y3Xd3g82YzLoKDV3uyJoQCVSqLE8nYDRdutLXhdU",
+  "hotDeployer": "DiDbnkw2tYL8K1M5ndLdSHWaeXr53kcKyDyS7SiuDcFn",
+  "lastUpdated": "2026-04-25",
+  "authorityNote": "Cold key signs upgrade authority but never holds value. Hot deployer keeps a small SOL balance for paying tx fees on upgrades. See DEPLOY_IDS.md.",
   "programs": {
     "clearstone_core": {
       "programId": "DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW",
@@ -11,8 +13,9 @@
       "tier": 2,
       "soPath": "target/deploy/clearstone_core.so",
       "soBytes": 1243120,
+      "deployedAt": "2026-04-25",
       "deployTx": "648My2i2WHJB4NZroooVz8hY1Wqk6diWmTy1pN4X7rZaHD3UmBVvDVoPJKsXidEAamqUrFQM4QracrJTKixUf33H",
-      "deployedAt": "2026-04-24"
+      "note": "Rotated 2026-04-25 from EKpLcVc6... (now closed). Includes the TradePt::try_accounts BPF stack-overflow fix shipped in this session."
     },
     "generic_exchange_rate_sy": {
       "programId": "HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3",
@@ -20,8 +23,8 @@
       "tier": 2,
       "soPath": "target/deploy/generic_exchange_rate_sy.so",
       "soBytes": 395960,
-      "deployTx": "PkEX9V6eBW3C8kxanSQiAPj1YHEk3Lt88mkXqigPewnrw5prNjopuun6BYpbT3ceZwRoKjiizzzAMz624pmTNaj",
-      "deployedAt": "2026-04-24"
+      "deployedAt": "2026-04-25",
+      "note": "Rotated 2026-04-25 from DZEqpkc... (now closed)."
     },
     "kamino_sy_adapter": {
       "programId": "29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd",
@@ -29,32 +32,35 @@
       "tier": 2,
       "soPath": "target/deploy/kamino_sy_adapter.so",
       "soBytes": 426944,
+      "deployedAt": "2026-04-24",
       "deployTx": "4QHpetcoQFP39ntyqgvTP2WakMWuMbUHY1SqAJLWvm6BEGYS2YrPqQVZ3Tyik2FFnVe3SWCNqp39KxEde3Jbwxcf",
-      "deployedAt": "2026-04-24"
+      "note": "Original deploy 2026-04-24. Authority transferred to cold key 2026-04-25."
     },
     "clearstone_rewards": {
       "programId": "7ddrynBQiCNjxejxRwxvSbDb56k8F8Yp4KwYgfiaHX8g",
-      "status": "pending",
+      "status": "live",
       "tier": 3,
       "soPath": "target/deploy/clearstone_rewards.so",
       "soBytes": 437112,
-      "rentEstimateSol": 3.1
+      "deployedAt": "2026-04-24"
     },
     "clearstone_router": {
       "programId": "DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW",
-      "status": "pending",
+      "status": "live",
       "tier": 3,
       "soPath": "target/deploy/clearstone_router.so",
       "soBytes": 609864,
-      "rentEstimateSol": 4.3
+      "deployedAt": "2026-04-25",
+      "note": "Upgraded 2026-04-25 to pick up new core CPI ID."
     },
     "clearstone_curator": {
       "programId": "831zw8r2fGwRB1QpuRU3gZHZBFYYHBHeG7RbKUz9ssGm",
-      "status": "pending",
+      "status": "live",
       "tier": 3,
       "soPath": "target/deploy/clearstone_curator.so",
       "soBytes": 708600,
-      "rentEstimateSol": 5.0
+      "deployedAt": "2026-04-25",
+      "note": "Upgraded 2026-04-25 to pick up new core CPI ID."
     },
     "clearstone_solver_callback": {
       "programId": "27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP",
@@ -62,7 +68,8 @@
       "tier": 3,
       "soPath": null,
       "soBytes": null,
-      "rentEstimateSol": null
+      "rentEstimateSol": null,
+      "note": "Not in Anchor.toml [workspace.members]. Decide for v1 whether to ship or defer."
     },
     "mock_klend": {
       "programId": "AKeo9L8sGnMABrsUs7gJAk8WLye62hSJ7ikZ6yytCGkv",
@@ -85,12 +92,26 @@
       "tier": "test-only"
     }
   },
+  "closedPrograms": {
+    "_note": "Programs permanently closed via `solana program close`. IDs cannot be reused.",
+    "clearstone_core_v1": {
+      "programId": "EKpLcVc6rky1ah28NMZFoT2oSXkAKWcEsr6nbZziTWbC",
+      "closedAt": "2026-04-25",
+      "reclaimedSol": 8.63689368,
+      "supersededBy": "clearstone_core (DZmP7za...)"
+    },
+    "generic_exchange_rate_sy_v1": {
+      "programId": "DZEqpkctMmB1Xq6foy1KnP3VayVFgJfykzi49fpWZ8M6",
+      "closedAt": "2026-04-25",
+      "reclaimedSol": 2.75708568,
+      "supersededBy": "generic_exchange_rate_sy (HA1T2p7...)"
+    }
+  },
   "summary": {
-    "live": 3,
-    "pending": 3,
+    "live": 6,
     "notBuilt": 1,
     "skipTestOnly": 4,
-    "remainingRentSolEstimate": 12.4,
-    "note": "Tier 3 needs ~12.4 SOL rent (rewards + router + curator) + solver_callback once built. Tx fees add ~0.1 SOL per program. For programs >400 KB, use the separated strategy: `solana program write-buffer --buffer <kp> --max-sign-attempts 60 --use-rpc --with-compute-unit-price 200000` (retryable), then `solana program deploy --buffer <kp> --program-id <program-kp>`. Devnet RPC frequently drops the inline `deploy` flow for programs >1 MB."
+    "closed": 2,
+    "note": "All 6 shipped programs (Tiers 2 + 3) are live on devnet under unified cold authority Hro4y3X.... Only solver_callback remains: not in workspace.members yet — decide ship-or-defer for v1. For future large-program upgrades, use the separated strategy: `solana program write-buffer --buffer <kp> --max-sign-attempts 60 --use-rpc --with-compute-unit-price 200000` (retryable), then `solana program deploy --buffer <kp> --program-id <program-kp>`."
   }
 }
