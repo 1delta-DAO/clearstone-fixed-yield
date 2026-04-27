@@ -26,6 +26,8 @@ import {
   SystemProgram,
   SYSVAR_INSTRUCTIONS_PUBKEY,
   Transaction,
+  TransactionMessage,
+  VersionedTransaction,
 } from "@solana/web3.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -190,6 +192,8 @@ async function freshFlashStack(): Promise<FlashStack> {
     user: solver,
     handles: sy,
     amountBase: new BN(100_000_000),
+    payer,
+    baseMintAuthority: payer,
   });
   const solverPtAta = (
     await getOrCreateAssociatedTokenAccount(
@@ -260,7 +264,14 @@ async function syCpiExtras(stack: FlashStack): Promise<anchor.web3.AccountMeta[]
       const pubkey = alt.state.addresses[idx];
       seen.set(idx, {
         pubkey,
-        isSigner: (existing?.isSigner ?? false) || ctx.isSigner,
+        // The IDL-declared isSigner flags refer to *PDA* signers
+        // satisfied via invoke_signed inside core's SY CPI (e.g. the
+        // market authority). Forwarding them as outer-tx is_signer=true
+        // makes web3.js's Transaction.serialize demand a real keypair
+        // signature for an account that's only ever PDA-signed. Strip
+        // them — the inner core handler will mark them signed via its
+        // own AccountMeta build + signer_seeds.
+        isSigner: false,
         isWritable: (existing?.isWritable ?? false) || ctx.isWritable,
       });
     }
@@ -277,6 +288,14 @@ async function callFlashSwap(
   const extras = await syCpiExtras(stack);
   const passthrough = callbackPassthrough(stack, callbackProgramId);
 
+  // Order matters: core forwards `remaining_accounts` verbatim to the
+  // callback after a fixed 6-account prefix, and the callback decodes
+  // them positionally. So `passthrough` (callback-targeted accounts)
+  // must come FIRST; the SY-CPI `extras` follow because do_get_sy_state
+  // looks them up by pubkey, not position. Putting extras first would
+  // make the callback's `solver_sy_src` slot collide with `syMarket`
+  // (owned by the adapter, fails InterfaceAccount<TokenAccount>'s
+  // owner check with AccountOwnedByWrongProgram).
   return core.methods
     .flashSwapPt(ptOut, Buffer.from([mode]))
     .accounts({
@@ -292,7 +311,7 @@ async function callFlashSwap(
       syProgram: syProgram.programId,
       tokenProgram: TOKEN_PROGRAM_ID,
     } as any)
-    .remainingAccounts([...extras, ...passthrough])
+    .remainingAccounts([...passthrough, ...extras])
     .preInstructions([CU_LIMIT_IX])
     .signers([stack.solver])
     .rpc();
@@ -409,18 +428,26 @@ describe("clearstone_core :: flash_swap_pt", () => {
   // -------------------------------------------------------------------------
   // End-to-end happy path via the real callback + fusion stack.
   //
-  // Requires (cloned into the test validator via Anchor.toml [[test.validator.clone]]):
-  //   • clearstone-fusion (9ShSnLUcWeg5BZzokj8mdo9cNHARCKa42kwmqSdBNM6J)
-  //   • clearstone_solver_callback (27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP)
+  // Skipped (in-progress): the test scaffolding now compiles and runs all
+  // the way to fusion.fill's inner CPI — clearstone_fusion is loaded via
+  // [[test.genesis]] (devnet-dumped .so), clearstone_solver_callback is
+  // built locally, the legacy-tx-too-big issue is fixed by routing
+  // through a v0 VersionedTransaction + the market ALT, and the
+  // remaining_accounts ordering matches the callback's positional
+  // decoder. The remaining failure is a "writable privilege escalated"
+  // mismatch on one of the fusion.fill passthrough accounts (the
+  // outer tx marks it read-only but fusion.fill's inner CPI needs it
+  // writable). Fixing it requires walking the fusion Fill ix's exact
+  // writable-flag layout per account and aligning fusionPassthrough[].
   //
-  // Flow:
+  // Flow (preserved):
   //   1. Stand up SPL vault + market via freshFlashStack (non-KYC path — src==SY).
   //   2. Maker keypair with SY; SPL `approve` to fusion delegate PDA.
   //   3. Build + Ed25519-sign an OrderConfig (src=SY, dst=PT, permissionless resolver_policy).
   //   4. Solver tx = [Ed25519.verify, core.flash_swap_pt] with:
   //        callback_program = clearstone_solver_callback
   //        callback_data    = borsh(orderBytes ++ fusionFillAmount)
-  //        remaining_accounts = SY-CPI extras ++ fusion Fill passthrough (17 slots)
+  //        remaining_accounts = fusion Fill passthrough ++ SY-CPI extras
   //   5. Assert: maker_dst_ata holds PT, solver.pt_ata ends at 0, flash_pt_debt clear.
   // -------------------------------------------------------------------------
   it("e2e happy path — fusion.fill via clearstone_solver_callback", async () => {
@@ -449,6 +476,8 @@ describe("clearstone_core :: flash_swap_pt", () => {
       user: maker,
       handles: stack.sy,
       amountBase: new BN(20_000_000),
+      payer,
+      baseMintAuthority: payer,
     });
 
     // Maker approves fusion's delegate PDA as a spending delegate on their SY ATA.
@@ -517,7 +546,10 @@ describe("clearstone_core :: flash_swap_pt", () => {
           const prev = seen.get(idx);
           seen.set(idx, {
             pubkey,
-            isSigner: ctx.isSigner || (prev?.isSigner ?? false),
+            // PDA-signed at the inner SY CPI via signer_seeds; outer-tx
+            // is_signer=true would force web3.js to demand a real
+            // keypair signature for an account that's never tx-signed.
+            isSigner: false,
             isWritable: ctx.isWritable || (prev?.isWritable ?? false),
           });
         }
@@ -550,9 +582,13 @@ describe("clearstone_core :: flash_swap_pt", () => {
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: findFusionDelegatePda(fusion.programId)[0], isSigner: false, isWritable: false },
       { pubkey: orderState, isSigner: false, isWritable: true },
-      // No fees. None sentinel for optional Option<Account> slots = program id.
-      { pubkey: fusion.programId, isSigner: false, isWritable: false },
-      { pubkey: fusion.programId, isSigner: false, isWritable: false },
+      // None sentinel for Option<UncheckedAccount> slots is the *executing*
+      // program — here, solver_callback (it owns the Accounts struct that
+      // decodes these). Using fusion's id makes Anchor treat the slot as
+      // Some(...) and trips the `#[account(mut)]` constraint with
+      // ConstraintMut.
+      { pubkey: callbackProgramId, isSigner: false, isWritable: false },
+      { pubkey: callbackProgramId, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
@@ -584,12 +620,41 @@ describe("clearstone_core :: flash_swap_pt", () => {
         syProgram: syProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
       } as any)
-      .remainingAccounts([...syExtras, ...fusionPassthrough])
-      .preInstructions([CU_LIMIT_IX])
+      // Same ordering rule as mockCallback: callback decodes the
+      // remaining_accounts positionally after its 6-account prefix, so
+      // `fusionPassthrough` must come FIRST. SY-CPI extras are looked
+      // up by pubkey (filter), not position, so they can follow.
+      .remainingAccounts([...fusionPassthrough, ...syExtras])
       .instruction();
 
-    const tx = new Transaction().add(ed25519Ix, flashIx);
-    await provider.sendAndConfirm(tx, [stack.solver], { commitment: "confirmed" });
+    // The legacy transaction here serializes to ~1360 bytes, over the
+    // 1232-byte cap. Use a v0 VersionedTransaction with the market's
+    // ALT — every account that's already in the ALT collapses from a
+    // 32-byte pubkey to a 1-byte index, easily clearing the limit.
+    //
+    // CU_LIMIT_IX is added explicitly here because `.instruction()`
+    // (unlike `.rpc()`) returns only the named ix and drops
+    // preInstructions; without it the chain runs out of CU on the
+    // fusion.fill → delta_mint hop.
+    const altInfo = (await provider.connection.getAddressLookupTable(stack.market.alt)).value!;
+    const latest = await provider.connection.getLatestBlockhash("confirmed");
+    const messageV0 = new TransactionMessage({
+      payerKey: stack.solver.publicKey,
+      recentBlockhash: latest.blockhash,
+      instructions: [CU_LIMIT_IX, ed25519Ix, flashIx],
+    }).compileToV0Message([altInfo]);
+    const vtx = new VersionedTransaction(messageV0);
+    vtx.sign([stack.solver]);
+    const sig = await provider.connection.sendTransaction(vtx, {
+      skipPreflight: false,
+    });
+    const conf = await provider.connection.confirmTransaction(
+      { signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight },
+      "confirmed"
+    );
+    if (conf.value.err) {
+      throw new Error(`fusion-fill tx failed: ${JSON.stringify(conf.value.err)}`);
+    }
 
     // -- Assertions --
     const makerPt = await getAccount(provider.connection, makerPtAta);

@@ -570,6 +570,16 @@
       "accounts": [
         {
           "name": "caller",
+          "docs": [
+            "Marked `mut` so the account is writable in the outer tx — callbacks",
+            "like clearstone_solver_callback re-pass `caller` as the `taker` slot",
+            "in a fusion.fill CPI, and fusion's IDL declares `taker` as writable.",
+            "Without `mut`, the inner CPI's writable flag would be a privilege",
+            "escalation over the outer-tx readonly flag and the runtime would",
+            "reject the tx with \"Cross-program invocation with unauthorized",
+            "signer or writable account\"."
+          ],
+          "writable": true,
           "signer": true
         },
         {

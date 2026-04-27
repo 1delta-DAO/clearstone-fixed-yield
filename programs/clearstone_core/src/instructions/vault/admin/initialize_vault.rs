@@ -227,7 +227,22 @@ impl InitializeVault<'_> {
     /// drives it through our own `invoke_signed` so we control the
     /// AccountInfo list explicitly — the high-level CpiBuilder proved
     /// fragile under Anchor 0.31.
-    fn create_metadata(&self, name: String, symbol: String, uri: String) -> Result<()> {
+    ///
+    /// Takes `authority_bump` explicitly rather than reading from
+    /// `self.vault.signer_bump`: when the vault account was just
+    /// init'd in this same ix, Anchor's in-memory Account<Vault>
+    /// reflects the most-recent struct-field assignments, but the
+    /// on-disk bytes don't get flushed until end-of-ix. The PDA
+    /// derivation in invoke_signed walks the seeds in memory, but
+    /// the ergonomic risk is real — passing the bump from
+    /// `ctx.bumps.authority` skips the dependency on serialized state.
+    fn create_metadata(
+        &self,
+        authority_bump: u8,
+        name: String,
+        symbol: String,
+        uri: String,
+    ) -> Result<()> {
         use anchor_lang::solana_program::program::invoke_signed;
 
         let metadata = self.metadata.to_account_info();
@@ -262,6 +277,10 @@ impl InitializeVault<'_> {
             },
         );
 
+        let vault_key = self.vault.key();
+        let bump_arr = [authority_bump];
+        let seeds: &[&[u8]] = &[AUTHORITY_SEED, vault_key.as_ref(), &bump_arr];
+
         invoke_signed(
             &ix,
             &[
@@ -272,7 +291,7 @@ impl InitializeVault<'_> {
                 system_program,
                 token_metadata_program,
             ],
-            &[&self.vault.signer_seeds()],
+            &[seeds],
         )?;
 
         Ok(())
@@ -384,8 +403,12 @@ pub fn handler(
     cpi_init_sy_personal_account(ctx.accounts.sy_program.key(), ctx.remaining_accounts)?;
 
     if enable_metadata {
-        ctx.accounts
-            .create_metadata(pt_metadata_name, pt_metadata_symbol, pt_metadata_uri)?;
+        ctx.accounts.create_metadata(
+            ctx.bumps.authority,
+            pt_metadata_name,
+            pt_metadata_symbol,
+            pt_metadata_uri,
+        )?;
     }
 
     Ok(())

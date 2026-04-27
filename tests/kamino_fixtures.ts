@@ -21,6 +21,7 @@ import {
   getOrCreateAssociatedTokenAccount,
   getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 
@@ -43,6 +44,7 @@ import {
   findVaultAuthority,
   findYieldPosition,
   numberFromU64,
+  retryOnAltCacheLag,
 } from "./fixtures";
 
 // ===== Seeds =====
@@ -185,6 +187,20 @@ export async function initMockKlendReserve(params: {
   const [liquiditySupply] = findKlendLiquiditySupply(reserve, program.programId);
   const [collateralMint] = findKlendCollateralMint(reserve, program.programId);
 
+  // mock_klend uses Interface<TokenInterface>, so it accepts either token
+  // program. Anchor's `init` of the liquidity_supply / collateral_mint
+  // accounts CPIs into the token program we pass — that program must own
+  // the liquidity_mint, otherwise InitializeAccount3 fails with
+  // IncorrectProgramId. Auto-detect the mint's owner. The KYC-pool wrapper
+  // mint is Token-2022; the regular SPL fixture mint is the legacy program.
+  const liquidityMintInfo = await program.provider.connection.getAccountInfo(
+    liquidityMint
+  );
+  const tokenProgram =
+    liquidityMintInfo?.owner.equals(TOKEN_2022_PROGRAM_ID)
+      ? TOKEN_2022_PROGRAM_ID
+      : TOKEN_PROGRAM_ID;
+
   await program.methods
     .initializeReserve()
     .accounts({
@@ -194,7 +210,7 @@ export async function initMockKlendReserve(params: {
       reserve,
       liquiditySupply,
       collateralMint,
-      tokenProgram: TOKEN_PROGRAM_ID,
+      tokenProgram,
       systemProgram: SystemProgram.programId,
       rent: SYSVAR_RENT_PUBKEY,
     } as any)
@@ -337,6 +353,17 @@ export async function initKaminoSyMarketGovernorWhitelist(params: {
     remaining.push({ pubkey: whitelistEntry, isSigner: false, isWritable: true });
   }
 
+  // The d-token underlying minted by the governor pool is Token-2022;
+  // both `sy_mint` (mint::decimals = underlying_mint.decimals) and
+  // `pool_escrow` / `collateral_vault` are init'd via this token_program,
+  // so passing the legacy program against a 2022 mint fails the CPI.
+  const underlyingInfo = await adapter.provider.connection.getAccountInfo(
+    underlyingMint
+  );
+  const tokenProgram = underlyingInfo?.owner.equals(TOKEN_2022_PROGRAM_ID)
+    ? TOKEN_2022_PROGRAM_ID
+    : TOKEN_PROGRAM_ID;
+
   await adapter.methods
     .initSyParams(kycMode as any, pdasToWhitelist.map((x) => x.pda))
     .accounts({
@@ -355,7 +382,7 @@ export async function initKaminoSyMarketGovernorWhitelist(params: {
       poolConfig,
       dmMintConfig,
       deltaMintProgram,
-      tokenProgram: TOKEN_PROGRAM_ID,
+      tokenProgram,
       systemProgram: SystemProgram.programId,
       rent: SYSVAR_RENT_PUBKEY,
     } as any)
@@ -419,6 +446,15 @@ export async function mintSyKamino(params: {
       klendCollateralMint: handles.klendCollateralMint,
       klendProgram: handles.klendProgramId,
       tokenProgram: TOKEN_PROGRAM_ID,
+      // Real-klend-only accounts; null → adapter takes the mock-klend path.
+      klendLendingMarket: null,
+      klendLendingMarketAuthority: null,
+      klendInstructionSysvar: null,
+      klendLiquidityTokenProgram: null,
+      klendPythOracle: null,
+      klendSwitchboardPrice: null,
+      klendSwitchboardTwap: null,
+      klendScopePrices: null,
     } as any)
     .signers([user])
     .rpc();
@@ -439,6 +475,21 @@ export function kaminoAdapterExtraAccountsForVault(
     { pubkey: handles.syMint, isSigner: false, isWritable: true },
     { pubkey: handles.poolEscrow, isSigner: false, isWritable: true },
     { pubkey: vaultPersonalPosition, isSigner: false, isWritable: true },
+    { pubkey: handles.klendReserve, isSigner: false, isWritable: false },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+  ];
+}
+
+/** Same as the vault-side helper but for tradePt / market-driven SY CPIs. */
+export function kaminoAdapterExtraAccountsForMarket(
+  handles: KaminoSyHandles,
+  marketPosition: PublicKey
+): anchor.web3.AccountMeta[] {
+  return [
+    { pubkey: handles.syMetadata, isSigner: false, isWritable: false },
+    { pubkey: handles.syMint, isSigner: false, isWritable: true },
+    { pubkey: handles.poolEscrow, isSigner: false, isWritable: true },
+    { pubkey: marketPosition, isSigner: false, isWritable: true },
     { pubkey: handles.klendReserve, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
   ];
@@ -770,45 +821,58 @@ export async function setupMarketOverKamino(
     { pubkey: marketPosition, isSigner: false, isWritable: true },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     { pubkey: kaminoHandles.poolEscrow, isSigner: false, isWritable: true },
+    // klend_reserve is the only deposit_sy CPI extra not already named in
+    // MarketTwoInit (sy_metadata + pool_escrow + position cover the rest).
+    // The adapter's DepositSy struct expects it, and it's resolved via
+    // ALT slot 6 from the market's stored cpi_accounts. Without this in
+    // remaining_accounts, the inner CPI fails with "An account required
+    // by the instruction is missing".
+    { pubkey: kaminoHandles.klendReserve, isSigner: false, isWritable: false },
   ];
 
-  await core.methods
-    .initMarketTwo(
-      lnFeeRateRoot,
-      rateScalarRoot,
-      initRateAnchor,
-      numberFromU64(syExchangeRate) as any,
-      ptInit,
-      syInit,
-      feeTreasurySyBps,
-      cpiAccounts,
-      seedId,
-      curator,
-      creatorFeeBps
-    )
-    .accounts({
-      payer: payer.publicKey,
-      market,
-      vault: vaultHandles.vault.publicKey,
-      mintSy: kaminoHandles.syMint,
-      mintPt: vaultHandles.mintPt,
-      mintLp,
-      escrowPt,
-      escrowSy,
-      ptSrc,
-      sySrc,
-      lpDst,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-      syProgram: adapterPid,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      addressLookupTable: alt,
-      tokenTreasuryFeeSy,
-    } as any)
-    .remainingAccounts(remainingAccounts)
-    .preInstructions([CU_LIMIT_IX])
-    .signers([payer])
-    .rpc();
+  await retryOnAltCacheLag(() =>
+    core.methods
+      .initMarketTwo(
+        lnFeeRateRoot,
+        rateScalarRoot,
+        initRateAnchor,
+        numberFromU64(syExchangeRate) as any,
+        ptInit,
+        syInit,
+        feeTreasurySyBps,
+        cpiAccounts,
+        seedId,
+        curator,
+        creatorFeeBps
+      )
+      .accounts({
+        payer: payer.publicKey,
+        market,
+        vault: vaultHandles.vault.publicKey,
+        mintSy: kaminoHandles.syMint,
+        mintPt: vaultHandles.mintPt,
+        mintLp,
+        escrowPt,
+        escrowSy,
+        ptSrc,
+        sySrc,
+        lpDst,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        syProgram: adapterPid,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        addressLookupTable: alt,
+        tokenTreasuryFeeSy,
+      } as any)
+      .remainingAccounts(remainingAccounts)
+      .preInstructions([CU_LIMIT_IX])
+      .signers([payer])
+      // See setupMarket in fixtures.ts: first-ALT-of-session cache lag
+      // in the simulator rejects the deposit_sy CPI even though the
+      // ALT is fully populated on-chain. Skip preflight; on-chain
+      // runtime sees it correctly.
+      .rpc({ skipPreflight: true })
+  );
 
   return {
     market,

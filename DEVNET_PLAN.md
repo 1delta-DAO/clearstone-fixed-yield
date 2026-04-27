@@ -226,56 +226,73 @@ either fixed or bypassed behind a feature flag.
 
 ### Remaining test failures
 
-**Status update (2026-04-24): 51–53 passing / 9–11 failing (flaky
-between runs). Suite includes additional test files not in Step 2
-scope — flash_swap_pt, kamino_sy_adapter, clearstone-fusion-flash.
-Step 2's exit criteria (curator/rewards/router green) hold.**
+**Status update (2026-04-26): 61 passing / 8 failing.** Step 2's
+periphery exit criteria hold (curator/rewards/router suites all
+green). The 8 remaining failures fall outside Step 2 scope:
 
 Fixed this session:
 - [x] **F2 (strip → merge roundtrip)** — cleared by the 2s grace
-  sleep in `createAndExtendAlt`. Preflight simulation needed more
-  time to see the populated ALT than the documented `creationSlot
-  + 1` minimum.
-- [x] **F3 (reentrant SY cannot re-invoke strip)** — cleared by
-  widening the assertion regex to accept Solana's runtime error
-  `"reentrancy not allowed"`. Root cause: the attack trips the
-  runtime's CPI-cycle detector (adapter invoking core while core is
-  already on the stack) *before* hitting our custom `latch` / code
-  6030. Both layers are valid — the test now accepts either.
-- [x] **F4 (reentrant SY cannot re-invoke merge)** — same fix as F3.
+  sleep in `createAndExtendAlt`.
+- [x] **F3/F4 (reentrant SY cannot re-invoke strip/merge)** — cleared
+  by widening the assertion regex to accept Solana's runtime CPI-cycle
+  error `"reentrancy not allowed"` in addition to our custom code
+  6030. Both layers fire; the test now accepts either.
+- [x] **mintSyForUser ATA bug** — helper now optionally takes
+  `payer + baseMintAuthority`; if both supplied, creates the user's
+  base ATA and funds it before swapping to SY. Unblocked the 6
+  fusion-flash tests that were dying on `AccountNotInitialized` for
+  base_src — they now reach further into the actual flow.
+- [x] **syCpiExtras forwards is_signer=true on PDA-signed accounts**
+  — the test helper in `clearstone-fusion-flash.ts` was extracting
+  `isSigner` flags from the market's stored `cpi_accounts` and
+  forwarding them as outer-tx AccountMetas. web3.js's
+  `Transaction.serialize` then demanded a real keypair signature for
+  accounts that are only ever PDA-signed via invoke_signed inside
+  core. Stripped `isSigner=false` on the forwarded extras (TWO copies
+  — one in `syCpiExtras()` near line 246, one inline near line 519
+  in the fusion-fill test). Unblocked 5 flash_swap_pt tests' simul
+  + the fusion-fill tx-build path.
 
-Still open:
-- [ ] **F1. `permissionless happy path :: user without privileged
-  keys creates SY → vault → market`** — the very first `freshStack`
-  call of a run still fails in `initialize_vault` simulation with
-  `"Instruction references an unknown account <X>"` immediately
-  after `init_personal_account` returns success. `enable_metadata
-  =false` so the handler issues no further CPI, meaning something
-  preflight-specific is referencing a pubkey not in the outer tx.
-  Tried: (a) 2s grace in createAndExtendAlt — helps F2 but not F1.
-  (b) in-fixture retry loop on this exact error — 3 attempts with
-  1s spacing; retry branch never logged in the run, suggesting the
-  caller handles the error synchronously somewhere we can't see.
-  (c) validator warmup via `before() { createMint(...) }` — no
-  change. Next things to try: capture the outer tx via
-  `provider.connection.simulateTransaction` with `sigVerify=false`
-  and print the full account-keys table to identify which pubkey
-  `<X>` is, and whether it's already in the list (→ runtime bug
-  against Solana 2.1.0) or actually absent (→ our wiring has a
-  legitimate hole that only matters under cold-cache simulation).
-- [ ] **flash_swap_pt suite (6 tests)** — fails with
-  `AccountNotInitialized` on `base_src` from
-  `tests/clearstone-fusion-flash.ts:freshFlashStack → mintSyForUser`.
-  The fusion flash tests predate this session; they expect an
-  already-funded base ATA that the fixture isn't creating. Not a
-  regression from Step 2 — the tests weren't running at all before
-  the workspace was expanded to include `mock_flash_callback`.
-- [ ] **kamino_sy_adapter (2 tests)** — `kyc_mode is optional`
-  fails at "incorrect program id for instruction" (cloned governor
-  program mismatch, likely stale devnet pin); `full PT/YT lifecycle`
-  fails at an init_personal_account "account required by the
-  instruction is missing" symptom very similar to F1. Worth
-  diagnosing together once F1 has a root-cause fix.
+Still open (8 failures, all outside Step 2 scope):
+
+- [ ] **F1. `clearstone-core :: permissionless happy path :: user
+  without privileged keys creates SY → vault → market`** — fails in
+  `setupMarket → init_market_two`'s do_deposit_sy CPI right after
+  `init_personal_account` returns success. `enable_metadata=false`
+  means the handler issues no Metaplex CPI; the failure is a SY-CPI
+  account-resolution issue inside `do_deposit_sy`. Most likely cause:
+  one of the 7 ALT-resolved pubkeys for the market's deposit_sy is
+  not in the outer tx's flat account list. Next: dump the market's
+  cpi_accounts.deposit_sy via a debug print, cross-reference with the
+  outer tx's account_keys, identify the missing pubkey, add it to
+  `setupMarket`'s remainingAccounts.
+- [ ] **flash_swap_pt sign-mismatch (4 tests):** `flash_swap_pt.rs:184`
+  hits `MathOverflow` because `quote.net_trader_sy >= 0` for the
+  test's curve parameters (init_rate_anchor=1.05, ptInit=syInit=1M,
+  fee=2%). The handler's `let net_trader_pt: i64 = -(pt_out as i64)`
+  treats the flash as a SELL for quoting purposes, but the curve
+  returns positive net_trader_sy meaning "trader receives SY for
+  selling PT" — non-physical for a flash borrow. Either the sign
+  flip is wrong (try `+pt_out` and require net_trader_sy > 0) or the
+  test's curve setup makes PT cheap enough that the curve says "we'd
+  pay you to take this PT". Feature-level invariant in
+  flash_swap_pt; not in Step 2's curator/rewards/router scope.
+- [ ] **fusion-fill tx too large (1 test):** `e2e happy path —
+  fusion.fill via clearstone_solver_callback` builds a legacy tx of
+  1360 bytes (limit 1232). Needs versioned tx + the market's ALT to
+  compress. Significant test rework; not Step 2 scope.
+- [ ] **kamino_sy_adapter `kyc_mode is optional :: GovernorWhitelist`
+  (1 test):** "Attempt to load a program that does not exist" — the
+  governor program isn't cloned into the local validator. Anchor.toml
+  has the clone directives intentionally commented out (devnet RPC
+  rate-limits made first-run startup unreliable). To re-enable: copy
+  the governor + delta_mint + gateway + fusion .so binaries into
+  `target/deploy/` with their canonical pubkeys (matches existing
+  `[programs.localnet]` pattern), and uncomment the
+  `[[test.validator.clone]]` blocks behind a flag.
+- [ ] **kamino_sy_adapter `full PT/YT lifecycle` (1 test):** same
+  symptom as F1 (init-flow account-resolution issue), likely the same
+  root cause. Will resolve when F1 does.
 
 ## Step 3 — Deploy machinery
 
@@ -352,6 +369,59 @@ Run all of these in order before first devnet deploy and keep them in
 **Exit criterion:** `scripts/devnet-e2e.ts` runs green against
 `api.devnet.solana.com`; output pubkeys are commitable to
 `DEPLOY_IDS.md` as canonical devnet handles.
+
+### Step-1 Metaplex question — **CLOSED 2026-04-26**
+
+The Step-1 Anchor-0.31 / Metaplex-CPI-fails-with-account-resolution
+issue was a **local-validator artifact, not a production bug**.
+Confirmed by running `scripts/devnet-e2e.ts` against the live
+program with `enableMetadata: true` flipped on `setupVault`:
+
+- Vault `7GVcU1H6A14uKwvffY4MBFXVFC8tNGYHR6bvsBCSEHub` initialized
+  cleanly, including the `CreateMetadataAccountV3` CPI.
+- Metadata PDA `2ZU778fvNiXCVLGkMcrA5q8Mks85oyvGNHnQFJgFCtvu` exists
+  on-chain (607 bytes, Metaplex V3 layout).
+- The local-validator failure is plausibly a Metaplex-program-clone
+  vs `mpl-token-metadata` 5.1.1 binary skew or a Solana 2.1.0
+  `[[test.validator.clone]]` quirk; investigation cost is high and
+  payoff is purely "tests can flip enableMetadata back to true".
+  Tests stay on `false`; production stays on `true`. Documented in
+  the `setupVault` `enableMetadata` field comment.
+
+### Remaining Step-4 follow-ups
+
+- [ ] **Reproducible-build verification under docker** — devnet
+  manifest (`deployments/devnet.json`) currently pins
+  `onChainSha256` only. To upgrade to `verifiedHash` (proves the
+  on-chain binary matches `commit f2aec2d`), run
+  `solana-verify build --library-name <crate>` per shipped program
+  with docker available. Cannot be done in the current environment
+  (docker daemon absent). Run on a workstation with docker before
+  audit kickoff.
+- [ ] **Kamino canonical-stack handles** — `kamino_sy_adapter` is
+  deployed (devnet `29tisXppY…`) and the real-klend CPI shape is
+  fixed (per [`FOLLOWUP_KAMINO_REAL_KLEND.md`](FOLLOWUP_KAMINO_REAL_KLEND.md))
+  but the live USDC reserve `D4qXufDqB…` is gated by a stale Pyth
+  oracle (`E4pitSrZ…`) that klend's `RefreshReserve` rejects with
+  `PriceNotValid (6044)`. Two paths to resolve:
+  - (preferred) Reconfigure the reserve with a klend-mock-friendly
+    oracle for devnet, OR push fresh prices via `update_price_feeds_v2`
+    immediately before each `mint_sy`.
+  - (fallback) Document that integrators bring their own klend
+    reserve + oracle pair when standing up a Kamino stack.
+  Either way, once unblocked: adapt `scripts/setup-devnet-usdc-stack.ts`
+  to build a `canonicalStack.kamino` block alongside the existing
+  `generic_exchange_rate_sy` one. Persist results in `devnet.json`.
+- [ ] **Cron-driven monitoring** — landed: see
+  `.github/workflows/devnet-health.yml` (daily 13:00 UTC) and
+  `devnet-e2e-refresh.yml` (Mondays 09:00 UTC). The e2e-refresh job
+  needs the `DEVNET_DEPLOYER_KEYPAIR_JSON` repo secret set
+  (JSON-encoded contents of `~/.config/solana/clearstone-devnet.json`)
+  before its first run will succeed.
+- [ ] **canonicalStack refresh cadence** — handled by the weekly
+  e2e-refresh action above. The action does NOT auto-PR the new
+  handles into `devnet.json`; it just surfaces them in the run log.
+  Treat handle changes as significant enough to want a manual review.
 
 ---
 

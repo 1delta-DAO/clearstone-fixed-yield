@@ -14,6 +14,10 @@
 #![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::{
+    instruction::{AccountMeta, Instruction},
+    program::invoke_signed,
+};
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::Token;
 use anchor_spl::token_interface::{
@@ -23,6 +27,16 @@ use clearstone_core::program::ClearstoneCore;
 use clearstone_core::state::{MarketTwo, Vault as CoreVault};
 use generic_exchange_rate_sy::program::GenericExchangeRateSy;
 use precise_number::Number;
+
+/// kamino_sy_adapter program ID. Used for runtime dispatch of mint_sy /
+/// redeem_sy CPIs — kamino's account shape differs from generic SY adapters
+/// (12 base + 8 optional accounts vs generic's 8). When `sy_program.key()`
+/// matches this, we hand-build the kamino-shaped Instruction.
+const KAMINO_SY_ADAPTER_ID: Pubkey =
+    anchor_lang::solana_program::pubkey!("29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd");
+
+/// kamino_sy_adapter::mint_sy discriminator (custom 1-byte override).
+const KAMINO_MINT_SY_DISC: u8 = 1;
 
 pub mod roll_delegation;
 pub use roll_delegation::{
@@ -259,25 +273,36 @@ pub mod clearstone_curator {
     ) -> Result<()> {
         require!(base_in > 0, CuratorError::ZeroAmount);
         let idx = allocation_index as usize;
-        let v = &mut ctx.accounts.vault;
-        require!(idx < v.allocations.len(), CuratorError::AllocationIndexOutOfRange);
-        require_keys_eq!(
-            v.allocations[idx].market,
-            ctx.accounts.market.key(),
-            CuratorError::AllocationMarketMismatch
-        );
-        let new_deployed = v.allocations[idx]
-            .deployed_base
-            .checked_add(base_in)
-            .ok_or(CuratorError::Overflow)?;
-        require!(
-            new_deployed <= v.allocations[idx].cap_base,
-            CuratorError::AllocationCapExceeded
-        );
+        // Snapshot fields needed for signer_seeds + cap checks before any
+        // mutable borrow — see PR-NOTES on the kamino dispatch refactor:
+        // the cpi_kamino_mint_sy helper takes &ctx.accounts which conflicts
+        // with a long-lived &mut on the vault account.
+        let curator;
+        let base_mint;
+        let bump_byte;
+        let new_deployed;
+        {
+            let v = &ctx.accounts.vault;
+            require!(idx < v.allocations.len(), CuratorError::AllocationIndexOutOfRange);
+            require_keys_eq!(
+                v.allocations[idx].market,
+                ctx.accounts.market.key(),
+                CuratorError::AllocationMarketMismatch
+            );
+            new_deployed = v.allocations[idx]
+                .deployed_base
+                .checked_add(base_in)
+                .ok_or(CuratorError::Overflow)?;
+            require!(
+                new_deployed <= v.allocations[idx].cap_base,
+                CuratorError::AllocationCapExceeded
+            );
+            curator = v.curator;
+            base_mint = v.base_mint;
+            bump_byte = v.bump;
+        } // immutable borrow released
 
-        let curator = v.curator;
-        let base_mint = v.base_mint;
-        let bump = [v.bump];
+        let bump = [bump_byte];
         let signer_seeds: &[&[&[u8]]] = &[&[
             CURATOR_VAULT_SEED,
             curator.as_ref(),
@@ -285,31 +310,41 @@ pub mod clearstone_curator {
             &bump,
         ]];
 
-        // (1) mint_sy: base_escrow (vault PDA auth) → vault_sy_ata
-        generic_exchange_rate_sy::cpi::mint_sy(
-            CpiContext::new_with_signer(
-                ctx.accounts.sy_program.to_account_info(),
-                generic_exchange_rate_sy::cpi::accounts::MintSy {
-                    owner: v.to_account_info(),
-                    sy_market: ctx.accounts.sy_market.to_account_info(),
-                    base_mint: ctx.accounts.base_mint.to_account_info(),
-                    sy_mint: ctx.accounts.sy_mint.to_account_info(),
-                    base_src: ctx.accounts.base_escrow.to_account_info(),
-                    base_vault: ctx.accounts.adapter_base_vault.to_account_info(),
-                    sy_dst: ctx.accounts.vault_sy_ata.to_account_info(),
-                    token_program: ctx.accounts.token_program.to_account_info(),
-                },
-                signer_seeds,
-            ),
-            base_in,
-        )?;
+        // Cache vault AccountInfo separately so we don't need a live borrow
+        // on ctx.accounts.vault during CPIs.
+        let vault_ai = ctx.accounts.vault.to_account_info();
+
+        // (1) mint_sy: base_escrow (vault PDA auth) → vault_sy_ata.
+        // Dispatch on the SY adapter program ID — generic vs kamino have
+        // different account shapes. See KAMINO_SY_ADAPTER_ID const.
+        if ctx.accounts.sy_program.key() == KAMINO_SY_ADAPTER_ID {
+            cpi_kamino_mint_sy(&ctx.accounts, base_in, signer_seeds)?;
+        } else {
+            generic_exchange_rate_sy::cpi::mint_sy(
+                CpiContext::new_with_signer(
+                    ctx.accounts.sy_program.to_account_info(),
+                    generic_exchange_rate_sy::cpi::accounts::MintSy {
+                        owner: vault_ai.clone(),
+                        sy_market: ctx.accounts.sy_market.to_account_info(),
+                        base_mint: ctx.accounts.base_mint.to_account_info(),
+                        sy_mint: ctx.accounts.sy_mint.to_account_info(),
+                        base_src: ctx.accounts.base_escrow.to_account_info(),
+                        base_vault: ctx.accounts.adapter_base_vault.to_account_info(),
+                        sy_dst: ctx.accounts.vault_sy_ata.to_account_info(),
+                        token_program: ctx.accounts.token_program.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                base_in,
+            )?;
+        }
 
         // (2) trade_pt buy: vault_sy_ata → vault_pt_ata. Vault PDA signs.
         clearstone_core::cpi::trade_pt(
             CpiContext::new_with_signer(
                 ctx.accounts.core_program.to_account_info(),
                 clearstone_core::cpi::accounts::TradePt {
-                    trader: v.to_account_info(),
+                    trader: vault_ai.clone(),
                     market: ctx.accounts.market.to_account_info(),
                     token_sy_trader: ctx.accounts.vault_sy_ata.to_account_info(),
                     token_pt_trader: ctx.accounts.vault_pt_ata.to_account_info(),
@@ -335,7 +370,7 @@ pub mod clearstone_curator {
             CpiContext::new_with_signer(
                 ctx.accounts.core_program.to_account_info(),
                 clearstone_core::cpi::accounts::DepositLiquidity {
-                    depositor: v.to_account_info(),
+                    depositor: vault_ai.clone(),
                     market: ctx.accounts.market.to_account_info(),
                     token_pt_src: ctx.accounts.vault_pt_ata.to_account_info(),
                     token_sy_src: ctx.accounts.vault_sy_ata.to_account_info(),
@@ -358,10 +393,15 @@ pub mod clearstone_curator {
             min_lp_out,
         )?;
 
-        v.allocations[idx].deployed_base = new_deployed;
+        let vault_key;
+        {
+            let v = &mut ctx.accounts.vault;
+            v.allocations[idx].deployed_base = new_deployed;
+            vault_key = v.key();
+        }
 
         emit!(ReallocatedToMarket {
-            vault: v.key(),
+            vault: vault_key,
             market: ctx.accounts.market.key(),
             allocation_index,
             base_in,
@@ -1032,6 +1072,147 @@ mod crank_cpi {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Kamino-SY mint_sy CPI helper
+//
+// kamino_sy_adapter::mint_sy expects 20 accounts (12 base + 8 optional). We
+// build the Instruction by hand and invoke_signed it with the vault PDA as
+// the owner signer. Reuses the curator's existing fields where the semantics
+// match (owner=vault, base_src=base_escrow, sy_dst=vault_sy_ata, sy_mint,
+// underlying_mint=base_mint, sy_metadata=sy_market, collateral_vault=
+// adapter_base_vault) and pulls the kamino-specific accounts from the new
+// Optional<UncheckedAccount> fields.
+// ---------------------------------------------------------------------------
+
+fn cpi_kamino_mint_sy<'info>(
+    accts: &ReallocateToMarket<'info>,
+    amount: u64,
+    signer_seeds: &[&[&[u8]]],
+) -> Result<()> {
+    let klend_program = accts
+        .kamino_klend_program
+        .as_ref()
+        .ok_or(CuratorError::MissingKaminoAccount)?
+        .to_account_info();
+    let klend_reserve = accts
+        .kamino_klend_reserve
+        .as_ref()
+        .ok_or(CuratorError::MissingKaminoAccount)?
+        .to_account_info();
+    let klend_liquidity_supply = accts
+        .kamino_klend_liquidity_supply
+        .as_ref()
+        .ok_or(CuratorError::MissingKaminoAccount)?
+        .to_account_info();
+    let klend_collateral_mint = accts
+        .kamino_klend_collateral_mint
+        .as_ref()
+        .ok_or(CuratorError::MissingKaminoAccount)?
+        .to_account_info();
+    let lending_market = accts
+        .kamino_klend_lending_market
+        .as_ref()
+        .ok_or(CuratorError::MissingKaminoAccount)?
+        .to_account_info();
+    let lma = accts
+        .kamino_klend_lending_market_authority
+        .as_ref()
+        .ok_or(CuratorError::MissingKaminoAccount)?
+        .to_account_info();
+    let ix_sysvar = accts
+        .kamino_klend_instruction_sysvar
+        .as_ref()
+        .ok_or(CuratorError::MissingKaminoAccount)?
+        .to_account_info();
+    let liq_token_prog = accts
+        .kamino_klend_liquidity_token_program
+        .as_ref()
+        .ok_or(CuratorError::MissingKaminoAccount)?
+        .to_account_info();
+    let pyth = accts
+        .kamino_klend_pyth_oracle
+        .as_ref()
+        .map(|a| a.to_account_info())
+        .unwrap_or_else(|| klend_program.clone());
+    let sb_price = accts
+        .kamino_klend_switchboard_price
+        .as_ref()
+        .map(|a| a.to_account_info())
+        .unwrap_or_else(|| klend_program.clone());
+    let sb_twap = accts
+        .kamino_klend_switchboard_twap
+        .as_ref()
+        .map(|a| a.to_account_info())
+        .unwrap_or_else(|| klend_program.clone());
+    let scope = accts
+        .kamino_klend_scope_prices
+        .as_ref()
+        .map(|a| a.to_account_info())
+        .unwrap_or_else(|| klend_program.clone());
+
+    let mut data = Vec::with_capacity(9);
+    data.push(KAMINO_MINT_SY_DISC);
+    data.extend_from_slice(&amount.to_le_bytes());
+
+    let metas = vec![
+        AccountMeta::new(accts.vault.key(), true),                 // owner = vault PDA (signer)
+        AccountMeta::new_readonly(accts.sy_market.key(), false),   // sy_metadata
+        AccountMeta::new_readonly(accts.base_mint.key(), false),   // underlying_mint
+        AccountMeta::new(accts.sy_mint.key(), false),              // sy_mint
+        AccountMeta::new(accts.base_escrow.key(), false),          // user_underlying = base_escrow
+        AccountMeta::new(accts.vault_sy_ata.key(), false),         // sy_dst
+        AccountMeta::new(accts.adapter_base_vault.key(), false),   // collateral_vault
+        AccountMeta::new(klend_reserve.key(), false),
+        AccountMeta::new(klend_liquidity_supply.key(), false),
+        AccountMeta::new(klend_collateral_mint.key(), false),
+        AccountMeta::new_readonly(klend_program.key(), false),
+        AccountMeta::new_readonly(accts.token_program.key(), false),
+        AccountMeta::new_readonly(lending_market.key(), false),
+        AccountMeta::new_readonly(lma.key(), false),
+        AccountMeta::new_readonly(ix_sysvar.key(), false),
+        AccountMeta::new_readonly(liq_token_prog.key(), false),
+        AccountMeta::new_readonly(pyth.key(), false),
+        AccountMeta::new_readonly(sb_price.key(), false),
+        AccountMeta::new_readonly(sb_twap.key(), false),
+        AccountMeta::new_readonly(scope.key(), false),
+    ];
+
+    let ix = Instruction {
+        program_id: accts.sy_program.key(),
+        accounts: metas,
+        data,
+    };
+
+    invoke_signed(
+        &ix,
+        &[
+            accts.vault.to_account_info(),
+            accts.sy_market.to_account_info(),
+            accts.base_mint.to_account_info(),
+            accts.sy_mint.to_account_info(),
+            accts.base_escrow.to_account_info(),
+            accts.vault_sy_ata.to_account_info(),
+            accts.adapter_base_vault.to_account_info(),
+            klend_reserve,
+            klend_liquidity_supply,
+            klend_collateral_mint,
+            klend_program,
+            accts.token_program.to_account_info(),
+            lending_market,
+            lma,
+            ix_sysvar,
+            liq_token_prog,
+            pyth,
+            sb_price,
+            sb_twap,
+            scope,
+            accts.sy_program.to_account_info(),
+        ],
+        signer_seeds,
+    )
+    .map_err(|e| e.into())
+}
+
 // -------------- State --------------
 
 #[account]
@@ -1393,13 +1574,49 @@ pub struct ReallocateToMarket<'info> {
     pub vault_lp_ata: Box<InterfaceAccount<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
-    pub sy_program: Program<'info, GenericExchangeRateSy>,
+    /// CHECK: SY-adapter program. Runtime-checked to be either
+    /// generic_exchange_rate_sy or kamino_sy_adapter (we dispatch on the
+    /// program key when building mint_sy).
+    pub sy_program: UncheckedAccount<'info>,
     pub core_program: Program<'info, ClearstoneCore>,
     /// CHECK: core_program's event_authority PDA.
     pub core_event_authority: UncheckedAccount<'info>,
 
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
+
+    // ----- Kamino-only optional accounts (None for generic adapter) -----
+    // First 4: required for kamino's mint_sy + klend deposit_reserve_liquidity.
+    /// CHECK: kamino klend program.
+    pub kamino_klend_program: Option<UncheckedAccount<'info>>,
+    /// CHECK: kamino klend reserve. Writable — mint_sy mutates it via klend.
+    #[account(mut)]
+    pub kamino_klend_reserve: Option<UncheckedAccount<'info>>,
+    /// CHECK: kamino klend reserve liquidity supply vault. Writable.
+    #[account(mut)]
+    pub kamino_klend_liquidity_supply: Option<UncheckedAccount<'info>>,
+    /// CHECK: kamino klend collateral mint (kUSDC). Writable — minted to.
+    #[account(mut)]
+    pub kamino_klend_collateral_mint: Option<UncheckedAccount<'info>>,
+    // Next 4: real-klend deposit accounts.
+    /// CHECK: real-klend lending_market.
+    pub kamino_klend_lending_market: Option<UncheckedAccount<'info>>,
+    /// CHECK: real-klend lending_market_authority PDA.
+    pub kamino_klend_lending_market_authority: Option<UncheckedAccount<'info>>,
+    /// CHECK: instruction sysvar.
+    pub kamino_klend_instruction_sysvar: Option<UncheckedAccount<'info>>,
+    /// CHECK: real-klend liquidity_token_program slot.
+    pub kamino_klend_liquidity_token_program: Option<UncheckedAccount<'info>>,
+    // Last 4: oracle slots — klend reads only the configured one; pass klend
+    // program ID as sentinel for the unconfigured ones.
+    /// CHECK: pyth oracle.
+    pub kamino_klend_pyth_oracle: Option<UncheckedAccount<'info>>,
+    /// CHECK: switchboard price oracle.
+    pub kamino_klend_switchboard_price: Option<UncheckedAccount<'info>>,
+    /// CHECK: switchboard twap oracle.
+    pub kamino_klend_switchboard_twap: Option<UncheckedAccount<'info>>,
+    /// CHECK: scope prices feed.
+    pub kamino_klend_scope_prices: Option<UncheckedAccount<'info>>,
 }
 
 #[derive(Accounts)]
@@ -1562,6 +1779,8 @@ pub enum CuratorError {
     AllocationMarketMismatch,
     #[msg("Allocation cap would be exceeded")]
     AllocationCapExceeded,
+    #[msg("sy_program is kamino_sy_adapter but a required kamino_* account was not provided")]
+    MissingKaminoAccount,
 }
 
 // Keep precise_number in use so the crate doesn't warn about unused import.

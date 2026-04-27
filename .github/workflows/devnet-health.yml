@@ -1,0 +1,35 @@
+name: devnet-health
+
+# Daily check that all live programs are still where deployments/devnet.json
+# says they are: program account exists, owner is the upgradeable BPF
+# loader, upgrade authority matches the cold key, and the on-chain ELF
+# sha256 hasn't drifted from what's pinned in the manifest.
+#
+# Runs every day at 13:00 UTC (mid-morning EU / pre-market US) and on
+# manual dispatch. Fails the run on any program failure (auth mismatch,
+# missing account, etc.) — set up a notification on Actions failures.
+
+on:
+  schedule:
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "yarn"
+
+      - name: Install deps
+        run: yarn install --frozen-lockfile
+
+      - name: Run devnet health check
+        env:
+          ANCHOR_PROVIDER_URL: https://api.devnet.solana.com
+        run: yarn run tsx scripts/devnet-health.ts

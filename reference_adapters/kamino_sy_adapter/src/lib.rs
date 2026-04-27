@@ -21,6 +21,10 @@
 
 use amount_value::Amount;
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::{
+    instruction::{AccountMeta, Instruction},
+    program::{invoke, invoke_signed},
+};
 use anchor_spl::token_interface::{
     burn, mint_to, transfer_checked, Burn, Mint, MintTo, TokenAccount, TokenInterface,
     TransferChecked,
@@ -31,6 +35,12 @@ use governor::{
 };
 use precise_number::Number;
 use sy_common::{MintSyReturnData, PositionState, RedeemSyReturnData, SyState};
+
+// Real klend instruction discriminators — sha256("global:<name>")[..8].
+// Cross-checked against Kamino-Finance/klend mainnet IDL on 2026-04-25.
+const REAL_KLEND_DEPOSIT_DISC: [u8; 8] = [169, 201, 30, 126, 6, 205, 102, 68];
+const REAL_KLEND_REDEEM_DISC: [u8; 8] = [234, 117, 181, 125, 185, 142, 220, 29];
+const REAL_KLEND_REFRESH_DISC: [u8; 8] = [2, 218, 138, 235, 79, 201, 25, 102];
 
 declare_id!("29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd");
 
@@ -117,21 +127,30 @@ pub mod kamino_sy_adapter {
         ctx.accounts.collateral_vault.reload()?;
         let coll_before = ctx.accounts.collateral_vault.amount;
 
-        // CPI klend.deposit_reserve_liquidity(amount_underlying)
-        let cpi_ctx = CpiContext::new(
-            ctx.accounts.klend_program.to_account_info(),
-            mock_klend::cpi::accounts::DepositReserveLiquidity {
-                user: ctx.accounts.owner.to_account_info(),
-                reserve: ctx.accounts.klend_reserve.to_account_info(),
-                liquidity_mint: ctx.accounts.underlying_mint.to_account_info(),
-                liquidity_supply: ctx.accounts.klend_liquidity_supply.to_account_info(),
-                collateral_mint: ctx.accounts.klend_collateral_mint.to_account_info(),
-                user_liquidity: ctx.accounts.user_underlying.to_account_info(),
-                user_collateral: ctx.accounts.collateral_vault.to_account_info(),
-                token_program: ctx.accounts.token_program.to_account_info(),
-            },
-        );
-        mock_klend::cpi::deposit_reserve_liquidity(cpi_ctx, amount_underlying)?;
+        // Dispatch on reserve account size: real klend (8624 bytes) requires a
+        // 12-account CPI plus an internal RefreshReserve precondition; mock klend
+        // uses the legacy 8-account shape. See FOLLOWUP_KAMINO_REAL_KLEND.md.
+        let reserve_len = ctx.accounts.klend_reserve.try_borrow_data()?.len();
+        if reserve_len == REAL_KLEND_RESERVE_LEN {
+            real_klend_refresh_reserve_for_mint(&ctx.accounts)?;
+            real_klend_deposit_reserve_liquidity(&ctx.accounts, amount_underlying)?;
+        } else {
+            // Mock klend path — legacy 8-account CPI.
+            let cpi_ctx = CpiContext::new(
+                ctx.accounts.klend_program.to_account_info(),
+                mock_klend::cpi::accounts::DepositReserveLiquidity {
+                    user: ctx.accounts.owner.to_account_info(),
+                    reserve: ctx.accounts.klend_reserve.to_account_info(),
+                    liquidity_mint: ctx.accounts.underlying_mint.to_account_info(),
+                    liquidity_supply: ctx.accounts.klend_liquidity_supply.to_account_info(),
+                    collateral_mint: ctx.accounts.klend_collateral_mint.to_account_info(),
+                    user_liquidity: ctx.accounts.user_underlying.to_account_info(),
+                    user_collateral: ctx.accounts.collateral_vault.to_account_info(),
+                    token_program: ctx.accounts.token_program.to_account_info(),
+                },
+            );
+            mock_klend::cpi::deposit_reserve_liquidity(cpi_ctx, amount_underlying)?;
+        }
 
         ctx.accounts.collateral_vault.reload()?;
         let coll_after = ctx.accounts.collateral_vault.amount;
@@ -194,21 +213,27 @@ pub mod kamino_sy_adapter {
 
         let liq_before = ctx.accounts.user_underlying.amount;
 
-        let cpi_ctx = CpiContext::new_with_signer(
-            ctx.accounts.klend_program.to_account_info(),
-            mock_klend::cpi::accounts::RedeemReserveCollateral {
-                user: ctx.accounts.sy_metadata.to_account_info(),
-                reserve: ctx.accounts.klend_reserve.to_account_info(),
-                liquidity_mint: ctx.accounts.underlying_mint.to_account_info(),
-                liquidity_supply: ctx.accounts.klend_liquidity_supply.to_account_info(),
-                collateral_mint: ctx.accounts.klend_collateral_mint.to_account_info(),
-                user_liquidity: ctx.accounts.user_underlying.to_account_info(),
-                user_collateral: ctx.accounts.collateral_vault.to_account_info(),
-                token_program: ctx.accounts.token_program.to_account_info(),
-            },
-            signer_seeds,
-        );
-        mock_klend::cpi::redeem_reserve_collateral(cpi_ctx, amount_sy)?;
+        let reserve_len = ctx.accounts.klend_reserve.try_borrow_data()?.len();
+        if reserve_len == REAL_KLEND_RESERVE_LEN {
+            real_klend_refresh_reserve_for_redeem(&ctx.accounts)?;
+            real_klend_redeem_reserve_collateral(&ctx.accounts, amount_sy, signer_seeds)?;
+        } else {
+            let cpi_ctx = CpiContext::new_with_signer(
+                ctx.accounts.klend_program.to_account_info(),
+                mock_klend::cpi::accounts::RedeemReserveCollateral {
+                    user: ctx.accounts.sy_metadata.to_account_info(),
+                    reserve: ctx.accounts.klend_reserve.to_account_info(),
+                    liquidity_mint: ctx.accounts.underlying_mint.to_account_info(),
+                    liquidity_supply: ctx.accounts.klend_liquidity_supply.to_account_info(),
+                    collateral_mint: ctx.accounts.klend_collateral_mint.to_account_info(),
+                    user_liquidity: ctx.accounts.user_underlying.to_account_info(),
+                    user_collateral: ctx.accounts.collateral_vault.to_account_info(),
+                    token_program: ctx.accounts.token_program.to_account_info(),
+                },
+                signer_seeds,
+            );
+            mock_klend::cpi::redeem_reserve_collateral(cpi_ctx, amount_sy)?;
+        }
 
         ctx.accounts.user_underlying.reload()?;
         let liq_after = ctx.accounts.user_underlying.amount;
@@ -594,6 +619,285 @@ fn read_u128(data: &[u8], offset: usize) -> Result<u128> {
     Ok(u128::from_le_bytes(slice))
 }
 
+// ---------------------------------------------------------------------------
+// Real klend CPI helpers
+//
+// klend's deposit/redeem ixs require a 12-account list that doesn't match
+// mock_klend's 8-account shape, plus a RefreshReserve precondition.
+// Account layouts pinned to the Kamino-Finance/klend mainnet IDL fetched
+// 2026-04-25 (see FOLLOWUP_KAMINO_REAL_KLEND.md).
+// ---------------------------------------------------------------------------
+
+/// Resolve all real-klend optional accounts from a `MintSy` context, or
+/// return `MissingRealKlendAccount` if any are missing.
+fn require_real_klend_mint<'info>(
+    accts: &MintSy<'info>,
+) -> Result<(
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+)> {
+    let lm = accts
+        .klend_lending_market
+        .as_ref()
+        .ok_or(AdapterError::MissingRealKlendAccount)?
+        .to_account_info();
+    let lma = accts
+        .klend_lending_market_authority
+        .as_ref()
+        .ok_or(AdapterError::MissingRealKlendAccount)?
+        .to_account_info();
+    let ix_sysvar = accts
+        .klend_instruction_sysvar
+        .as_ref()
+        .ok_or(AdapterError::MissingRealKlendAccount)?
+        .to_account_info();
+    let liq_token_prog = accts
+        .klend_liquidity_token_program
+        .as_ref()
+        .ok_or(AdapterError::MissingRealKlendAccount)?
+        .to_account_info();
+    let pyth = sentinel_or(accts.klend_pyth_oracle.as_ref(), &accts.klend_program);
+    let sb_price = sentinel_or(
+        accts.klend_switchboard_price.as_ref(),
+        &accts.klend_program,
+    );
+    let sb_twap = sentinel_or(
+        accts.klend_switchboard_twap.as_ref(),
+        &accts.klend_program,
+    );
+    let scope = sentinel_or(accts.klend_scope_prices.as_ref(), &accts.klend_program);
+    Ok((lm, lma, ix_sysvar, liq_token_prog, pyth, sb_price, sb_twap, scope))
+}
+
+/// Same for `RedeemSy`. Duplicated rather than generic so the AccountInfo
+/// borrows are simple to reason about.
+fn require_real_klend_redeem<'info>(
+    accts: &RedeemSy<'info>,
+) -> Result<(
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+    AccountInfo<'info>,
+)> {
+    let lm = accts
+        .klend_lending_market
+        .as_ref()
+        .ok_or(AdapterError::MissingRealKlendAccount)?
+        .to_account_info();
+    let lma = accts
+        .klend_lending_market_authority
+        .as_ref()
+        .ok_or(AdapterError::MissingRealKlendAccount)?
+        .to_account_info();
+    let ix_sysvar = accts
+        .klend_instruction_sysvar
+        .as_ref()
+        .ok_or(AdapterError::MissingRealKlendAccount)?
+        .to_account_info();
+    let liq_token_prog = accts
+        .klend_liquidity_token_program
+        .as_ref()
+        .ok_or(AdapterError::MissingRealKlendAccount)?
+        .to_account_info();
+    let pyth = sentinel_or(accts.klend_pyth_oracle.as_ref(), &accts.klend_program);
+    let sb_price = sentinel_or(
+        accts.klend_switchboard_price.as_ref(),
+        &accts.klend_program,
+    );
+    let sb_twap = sentinel_or(
+        accts.klend_switchboard_twap.as_ref(),
+        &accts.klend_program,
+    );
+    let scope = sentinel_or(accts.klend_scope_prices.as_ref(), &accts.klend_program);
+    Ok((lm, lma, ix_sysvar, liq_token_prog, pyth, sb_price, sb_twap, scope))
+}
+
+/// `Some(x)` → `x.to_account_info()`; `None` → `sentinel.to_account_info()`.
+fn sentinel_or<'info>(
+    opt: Option<&UncheckedAccount<'info>>,
+    sentinel: &UncheckedAccount<'info>,
+) -> AccountInfo<'info> {
+    opt.map(|a| a.to_account_info())
+        .unwrap_or_else(|| sentinel.to_account_info())
+}
+
+/// Build + invoke `klend.refresh_reserve(reserve, lending_market, oracles…)`.
+/// klend reads only the configured oracle slot; sentinels for the others.
+fn real_klend_refresh_reserve<'info>(
+    klend_program: AccountInfo<'info>,
+    reserve: AccountInfo<'info>,
+    lending_market: AccountInfo<'info>,
+    pyth: AccountInfo<'info>,
+    sb_price: AccountInfo<'info>,
+    sb_twap: AccountInfo<'info>,
+    scope: AccountInfo<'info>,
+) -> Result<()> {
+    let metas = vec![
+        AccountMeta::new(reserve.key(), false),
+        AccountMeta::new_readonly(lending_market.key(), false),
+        AccountMeta::new_readonly(pyth.key(), false),
+        AccountMeta::new_readonly(sb_price.key(), false),
+        AccountMeta::new_readonly(sb_twap.key(), false),
+        AccountMeta::new_readonly(scope.key(), false),
+    ];
+    let ix = Instruction {
+        program_id: klend_program.key(),
+        accounts: metas,
+        data: REAL_KLEND_REFRESH_DISC.to_vec(),
+    };
+    invoke(
+        &ix,
+        &[
+            reserve,
+            lending_market,
+            pyth,
+            sb_price,
+            sb_twap,
+            scope,
+            klend_program,
+        ],
+    )
+    .map_err(|e| e.into())
+}
+
+fn real_klend_refresh_reserve_for_mint<'info>(accts: &MintSy<'info>) -> Result<()> {
+    let (lm, _lma, _ix_sv, _ltp, pyth, sb_price, sb_twap, scope) =
+        require_real_klend_mint(accts)?;
+    real_klend_refresh_reserve(
+        accts.klend_program.to_account_info(),
+        accts.klend_reserve.to_account_info(),
+        lm,
+        pyth,
+        sb_price,
+        sb_twap,
+        scope,
+    )
+}
+
+fn real_klend_refresh_reserve_for_redeem<'info>(accts: &RedeemSy<'info>) -> Result<()> {
+    let (lm, _lma, _ix_sv, _ltp, pyth, sb_price, sb_twap, scope) =
+        require_real_klend_redeem(accts)?;
+    real_klend_refresh_reserve(
+        accts.klend_program.to_account_info(),
+        accts.klend_reserve.to_account_info(),
+        lm,
+        pyth,
+        sb_price,
+        sb_twap,
+        scope,
+    )
+}
+
+/// Build + invoke `klend.deposit_reserve_liquidity(amount)` against a real
+/// klend reserve. Owner is `accts.owner` (the user); they sign the outer tx.
+fn real_klend_deposit_reserve_liquidity<'info>(
+    accts: &MintSy<'info>,
+    amount: u64,
+) -> Result<()> {
+    let (lm, lma, ix_sv, liq_token_prog, _, _, _, _) = require_real_klend_mint(accts)?;
+    let mut data = REAL_KLEND_DEPOSIT_DISC.to_vec();
+    data.extend_from_slice(&amount.to_le_bytes());
+    let metas = vec![
+        AccountMeta::new(accts.owner.key(), true),
+        AccountMeta::new(accts.klend_reserve.key(), false),
+        AccountMeta::new_readonly(lm.key(), false),
+        AccountMeta::new_readonly(lma.key(), false),
+        AccountMeta::new_readonly(accts.underlying_mint.key(), false),
+        AccountMeta::new(accts.klend_liquidity_supply.key(), false),
+        AccountMeta::new(accts.klend_collateral_mint.key(), false),
+        AccountMeta::new(accts.user_underlying.key(), false),
+        AccountMeta::new(accts.collateral_vault.key(), false),
+        AccountMeta::new_readonly(accts.token_program.key(), false),
+        AccountMeta::new_readonly(liq_token_prog.key(), false),
+        AccountMeta::new_readonly(ix_sv.key(), false),
+    ];
+    let ix = Instruction {
+        program_id: accts.klend_program.key(),
+        accounts: metas,
+        data,
+    };
+    invoke(
+        &ix,
+        &[
+            accts.owner.to_account_info(),
+            accts.klend_reserve.to_account_info(),
+            lm,
+            lma,
+            accts.underlying_mint.to_account_info(),
+            accts.klend_liquidity_supply.to_account_info(),
+            accts.klend_collateral_mint.to_account_info(),
+            accts.user_underlying.to_account_info(),
+            accts.collateral_vault.to_account_info(),
+            accts.token_program.to_account_info(),
+            liq_token_prog,
+            ix_sv,
+            accts.klend_program.to_account_info(),
+        ],
+    )
+    .map_err(|e| e.into())
+}
+
+/// Build + invoke `klend.redeem_reserve_collateral(amount)` against a real
+/// klend reserve. Owner is the SY metadata PDA; signer_seeds authorises it.
+fn real_klend_redeem_reserve_collateral<'info>(
+    accts: &RedeemSy<'info>,
+    amount: u64,
+    signer_seeds: &[&[&[u8]]],
+) -> Result<()> {
+    let (lm, lma, ix_sv, liq_token_prog, _, _, _, _) = require_real_klend_redeem(accts)?;
+    let mut data = REAL_KLEND_REDEEM_DISC.to_vec();
+    data.extend_from_slice(&amount.to_le_bytes());
+    let metas = vec![
+        AccountMeta::new_readonly(accts.sy_metadata.key(), true),
+        AccountMeta::new_readonly(lm.key(), false),
+        AccountMeta::new(accts.klend_reserve.key(), false),
+        AccountMeta::new_readonly(lma.key(), false),
+        AccountMeta::new_readonly(accts.underlying_mint.key(), false),
+        AccountMeta::new(accts.klend_collateral_mint.key(), false),
+        AccountMeta::new(accts.klend_liquidity_supply.key(), false),
+        AccountMeta::new(accts.collateral_vault.key(), false),
+        AccountMeta::new(accts.user_underlying.key(), false),
+        AccountMeta::new_readonly(accts.token_program.key(), false),
+        AccountMeta::new_readonly(liq_token_prog.key(), false),
+        AccountMeta::new_readonly(ix_sv.key(), false),
+    ];
+    let ix = Instruction {
+        program_id: accts.klend_program.key(),
+        accounts: metas,
+        data,
+    };
+    invoke_signed(
+        &ix,
+        &[
+            accts.sy_metadata.to_account_info(),
+            lm,
+            accts.klend_reserve.to_account_info(),
+            lma,
+            accts.underlying_mint.to_account_info(),
+            accts.klend_collateral_mint.to_account_info(),
+            accts.klend_liquidity_supply.to_account_info(),
+            accts.collateral_vault.to_account_info(),
+            accts.user_underlying.to_account_info(),
+            accts.token_program.to_account_info(),
+            liq_token_prog,
+            ix_sv,
+            accts.klend_program.to_account_info(),
+        ],
+        signer_seeds,
+    )
+    .map_err(|e| e.into())
+}
+
 // -------------- State --------------
 
 #[account]
@@ -640,6 +944,11 @@ pub struct InitSyParams<'info> {
 
     /// Curator is the caller authorizing the init. When kyc_mode is GovernorWhitelist
     /// they must be a governor root/admin — enforced by the governor CPI in M-KYC-3.
+    /// Marked `mut` because the governor CPI's `add_participant_via_pool` requires
+    /// the authority to be writable; without the annotation Anchor builds the outer
+    /// tx's AccountMeta read-only and the inner CPI fails with
+    /// "writable privilege escalated".
+    #[account(mut)]
     pub curator: Signer<'info>,
 
     pub underlying_mint: Box<InterfaceAccount<'info, Mint>>,
@@ -701,8 +1010,12 @@ pub struct InitSyParams<'info> {
     /// CHECK: validated against kyc_mode payload.
     pub governor_program: Option<UncheckedAccount<'info>>,
     /// CHECK: validated against kyc_mode payload.
+    /// `mut` because the governor CPI's `pool_config` slot is writable.
+    #[account(mut)]
     pub pool_config: Option<UncheckedAccount<'info>>,
     /// CHECK: validated against kyc_mode payload.
+    /// `mut` because the governor CPI's `dm_mint_config` slot is writable.
+    #[account(mut)]
     pub dm_mint_config: Option<UncheckedAccount<'info>>,
     /// CHECK: validated against kyc_mode payload.
     pub delta_mint_program: Option<UncheckedAccount<'info>>,
@@ -758,6 +1071,26 @@ pub struct MintSy<'info> {
     pub klend_program: UncheckedAccount<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
+
+    // ----- Real-klend-only accounts -----
+    // Required when klend_reserve.data.len() == REAL_KLEND_RESERVE_LEN.
+    // Pass `klend_program` (or any sentinel) for None on mock-klend reserves.
+    /// CHECK: klend lending market — opaque to adapter.
+    pub klend_lending_market: Option<UncheckedAccount<'info>>,
+    /// CHECK: klend lending_market_authority PDA `[b"lma", lending_market]`.
+    pub klend_lending_market_authority: Option<UncheckedAccount<'info>>,
+    /// CHECK: instruction sysvar (`Sysvar1nstructions...`).
+    pub klend_instruction_sysvar: Option<UncheckedAccount<'info>>,
+    /// CHECK: real-klend `liquidity_token_program` slot.
+    pub klend_liquidity_token_program: Option<UncheckedAccount<'info>>,
+    /// CHECK: refresh_reserve oracle slots — klend reads only the configured one.
+    pub klend_pyth_oracle: Option<UncheckedAccount<'info>>,
+    /// CHECK: refresh_reserve oracle slots — klend reads only the configured one.
+    pub klend_switchboard_price: Option<UncheckedAccount<'info>>,
+    /// CHECK: refresh_reserve oracle slots — klend reads only the configured one.
+    pub klend_switchboard_twap: Option<UncheckedAccount<'info>>,
+    /// CHECK: refresh_reserve oracle slots — klend reads only the configured one.
+    pub klend_scope_prices: Option<UncheckedAccount<'info>>,
 }
 
 #[derive(Accounts)]
@@ -806,6 +1139,24 @@ pub struct RedeemSy<'info> {
     pub klend_program: UncheckedAccount<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
+
+    // ----- Real-klend-only accounts (mirror MintSy) -----
+    /// CHECK: klend lending market.
+    pub klend_lending_market: Option<UncheckedAccount<'info>>,
+    /// CHECK: klend lending_market_authority PDA.
+    pub klend_lending_market_authority: Option<UncheckedAccount<'info>>,
+    /// CHECK: instruction sysvar.
+    pub klend_instruction_sysvar: Option<UncheckedAccount<'info>>,
+    /// CHECK: real-klend `liquidity_token_program` slot.
+    pub klend_liquidity_token_program: Option<UncheckedAccount<'info>>,
+    /// CHECK: refresh_reserve oracle slots.
+    pub klend_pyth_oracle: Option<UncheckedAccount<'info>>,
+    /// CHECK: refresh_reserve oracle slots.
+    pub klend_switchboard_price: Option<UncheckedAccount<'info>>,
+    /// CHECK: refresh_reserve oracle slots.
+    pub klend_switchboard_twap: Option<UncheckedAccount<'info>>,
+    /// CHECK: refresh_reserve oracle slots.
+    pub klend_scope_prices: Option<UncheckedAccount<'info>>,
 }
 
 #[derive(Accounts)]
@@ -944,6 +1295,8 @@ pub enum AdapterError {
     WhitelistNotInKycMode,
     #[msg("Reserve account data malformed / unexpected layout")]
     ReserveDataMalformed,
+    #[msg("Real klend reserve detected but required account (lending_market / lending_market_authority / instruction_sysvar / liquidity_token_program) not provided")]
+    MissingRealKlendAccount,
 }
 
 // -------------- Tests --------------

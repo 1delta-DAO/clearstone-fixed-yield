@@ -179,8 +179,13 @@
           "name": "curator",
           "docs": [
             "Curator is the caller authorizing the init. When kyc_mode is GovernorWhitelist",
-            "they must be a governor root/admin — enforced by the governor CPI in M-KYC-3."
+            "they must be a governor root/admin — enforced by the governor CPI in M-KYC-3.",
+            "Marked `mut` because the governor CPI's `add_participant_via_pool` requires",
+            "the authority to be writable; without the annotation Anchor builds the outer",
+            "tx's AccountMeta read-only and the inner CPI fails with",
+            "\"writable privilege escalated\"."
           ],
+          "writable": true,
           "signer": true
         },
         {
@@ -229,10 +234,18 @@
         },
         {
           "name": "pool_config",
+          "docs": [
+            "`mut` because the governor CPI's `pool_config` slot is writable."
+          ],
+          "writable": true,
           "optional": true
         },
         {
           "name": "dm_mint_config",
+          "docs": [
+            "`mut` because the governor CPI's `dm_mint_config` slot is writable."
+          ],
+          "writable": true,
           "optional": true
         },
         {
@@ -319,6 +332,38 @@
         },
         {
           "name": "token_program"
+        },
+        {
+          "name": "klend_lending_market",
+          "optional": true
+        },
+        {
+          "name": "klend_lending_market_authority",
+          "optional": true
+        },
+        {
+          "name": "klend_instruction_sysvar",
+          "optional": true
+        },
+        {
+          "name": "klend_liquidity_token_program",
+          "optional": true
+        },
+        {
+          "name": "klend_pyth_oracle",
+          "optional": true
+        },
+        {
+          "name": "klend_switchboard_price",
+          "optional": true
+        },
+        {
+          "name": "klend_switchboard_twap",
+          "optional": true
+        },
+        {
+          "name": "klend_scope_prices",
+          "optional": true
         }
       ],
       "args": [
@@ -386,6 +431,38 @@
         },
         {
           "name": "token_program"
+        },
+        {
+          "name": "klend_lending_market",
+          "optional": true
+        },
+        {
+          "name": "klend_lending_market_authority",
+          "optional": true
+        },
+        {
+          "name": "klend_instruction_sysvar",
+          "optional": true
+        },
+        {
+          "name": "klend_liquidity_token_program",
+          "optional": true
+        },
+        {
+          "name": "klend_pyth_oracle",
+          "optional": true
+        },
+        {
+          "name": "klend_switchboard_price",
+          "optional": true
+        },
+        {
+          "name": "klend_switchboard_twap",
+          "optional": true
+        },
+        {
+          "name": "klend_scope_prices",
+          "optional": true
         }
       ],
       "args": [
@@ -525,6 +602,11 @@
       "code": 6008,
       "name": "ReserveDataMalformed",
       "msg": "Reserve account data malformed / unexpected layout"
+    },
+    {
+      "code": 6009,
+      "name": "MissingRealKlendAccount",
+      "msg": "Real klend reserve detected but required account (lending_market / lending_market_authority / instruction_sysvar / liquidity_token_program) not provided"
     }
   ],
   "types": [

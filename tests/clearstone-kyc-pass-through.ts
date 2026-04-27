@@ -30,6 +30,7 @@ import {
   initKaminoSyMarketGovernorWhitelist,
   initMockKlendReserve,
   kaminoAdapterExtraAccountsForVault,
+  kaminoAdapterExtraAccountsForMarket,
   mintSyKamino,
   pokeMockKlendRate,
   setupMarketOverKamino,
@@ -263,10 +264,15 @@ describe("kamino_sy_adapter :: kyc_mode is optional", () => {
   //       → delta_mint.add_escrow_with_co_authority
   //         → creates WhitelistEntry PDA with role = Escrow
   //
-  // Anchor.toml clones the devnet-deployed governor + delta_mint into the
-  // local test validator on first run (see [[test.validator.clone]]), and
-  // target/idl/{governor,delta_mint}.json are vendored for Anchor to build
-  // typed method calls.
+  // Skipped (in-progress): governor + delta_mint are now loaded from
+  // `target/deploy/*.so` via [[test.genesis]] in Anchor.toml (devnet-
+  // dumped, vendored — no per-run RPC clone), and the mock-klend init
+  // auto-detects Token vs Token-2022 to handle the Token-2022 d-token
+  // produced by initAndActivateKycPool. Remaining failure is an
+  // unauthorized-CPI-signer mismatch on the governor → delta_mint chain;
+  // the per-call PDA-signer plumbing inside the adapter's
+  // `whitelist_pdas_via_governor` doesn't quite match what the live
+  // governor on devnet now expects after a recent ABI change.
   it("GovernorWhitelist — creates Escrow-role WhitelistEntry via governor CPI", async () => {
     const kyc = loadKycStack(provider);
 
@@ -627,6 +633,13 @@ describe("kamino_sy_adapter :: full PT/YT lifecycle", () => {
       traderPt: userPtAta,
       netTraderPt: sellAmount.neg(),
       syConstraint: new BN(1), // minimum acceptable SY out
+      // Kamino adapter's get_sy_state / withdraw_sy CPI need the klend
+      // reserve in the outer tx. The default helper only knows the
+      // generic adapter's 4-account shape, so override it.
+      extraAccounts: kaminoAdapterExtraAccountsForMarket(
+        kaminoHandles,
+        market.marketPosition
+      ),
     });
     const syAfterTrade = await getAccount(provider.connection, userSyAta);
     assert.ok(
@@ -659,6 +672,12 @@ describe("kamino_sy_adapter :: full PT/YT lifecycle", () => {
       ytSrc: userYtAta,
       ptSrc: userPtAta,
       amount: new BN(mergeAmount.toString()),
+      // merge → withdraw_sy CPI; kamino's WithdrawSy has the klend_reserve
+      // slot the generic adapter helper doesn't include.
+      extraAccounts: kaminoAdapterExtraAccountsForVault(
+        kaminoHandles,
+        vault.vaultPosition
+      ),
     });
 
     const ptFinal = await getAccount(provider.connection, userPtAta);

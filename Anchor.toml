@@ -13,6 +13,7 @@ members = [
     "periphery/clearstone_rewards",
     "periphery/clearstone_curator",
     "periphery/clearstone_router",
+    "periphery/clearstone_solver_callback",
 ]
 
 [features]
@@ -67,25 +68,27 @@ test = "yarn run mocha --import=tsx --timeout 1000000 tests/**/*.ts"
 [[test.validator.clone]]
 address = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
 
-# TEMP (2026-04-24): devnet-only clones disabled because
-# api.devnet.solana.com rate-limits this IP aggressively and the
-# validator's clone-fetch retries burn through that budget before
-# tests can start. These are only needed by
-# tests/clearstone-kyc-pass-through.ts and
-# tests/clearstone-fusion-flash.ts — neither of which is required
-# for Step 2 coverage (curator / rewards / router / core). Re-enable
-# after moving them behind an API-keyed RPC or copying the program
-# binaries into target/deploy/.
-# [[test.validator.clone]]
-# address = "BKprvLqNUDCGrpxddppHHQ3UBhof8J5axyexDyctX1xy" # delta_mint
-# [[test.validator.clone]]
-# address = "6xqW3D1ebp5WjbYh4vwar7ponxrpEaQiVG6uhBYVZtJi" # governor
-# [[test.validator.clone]]
-# address = "gatem74V238djXdzWnJf94Wo1DcnuGkfijbf3AuBhfs"
-# [[test.validator.clone]]
-# address = "9ShSnLUcWeg5BZzokj8mdo9cNHARCKa42kwmqSdBNM6J" # clearstone_fusion
-# [[test.validator.clone]]
-# address = "27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP" # clearstone_solver_callback
+# Devnet third-party programs — vendored as .so binaries in target/deploy/
+# (dumped via `solana program dump -u devnet <addr> target/deploy/<name>.so`).
+# Loading them via `[[test.genesis]]` puts each program in the local
+# validator's bank at startup with no devnet RPC round-trip, so the
+# rate-limit problem that forced these to be commented out before is
+# moot. Required by:
+#   - tests/clearstone-kyc-pass-through.ts (governor + delta_mint)
+#   - tests/clearstone-fusion-flash.ts (clearstone_fusion)
+# clearstone_solver_callback is built locally from periphery/, not cloned.
+[[test.genesis]]
+address = "BKprvLqNUDCGrpxddppHHQ3UBhof8J5axyexDyctX1xy"   # delta_mint
+program = "target/deploy/delta_mint.so"
+[[test.genesis]]
+address = "6xqW3D1ebp5WjbYh4vwar7ponxrpEaQiVG6uhBYVZtJi"   # governor
+program = "target/deploy/governor.so"
+[[test.genesis]]
+address = "gatem74V238djXdzWnJf94Wo1DcnuGkfijbf3AuBhfs"    # gateway
+program = "target/deploy/gateway.so"
+[[test.genesis]]
+address = "9ShSnLUcWeg5BZzokj8mdo9cNHARCKa42kwmqSdBNM6J"   # clearstone_fusion
+program = "target/deploy/clearstone_fusion.so"
 
 # Mainnet URL for the Metaplex clone above. Not rate-limited for the
 # single program fetch we need at validator startup.

@@ -565,6 +565,25 @@ describe("clearstone-curator :: reallocate_to_market + mark_to_market", () => {
         coreEventAuthority: coreEventAuth,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
+        // 12 optional Kamino slots: this stack uses generic_exchange_rate_sy,
+        // not kamino_sy_adapter, so they all resolve to None on the
+        // Rust side. Anchor 0.31's `validateAccounts` treats `null` as
+        // "not provided" (it doesn't honor the IDL's `optional: true`
+        // flag), so we pass `curator.programId` as a sentinel — the
+        // Rust handler skips them when the curator's adapter is the
+        // generic one and never reads these fields.
+        kaminoKlendProgram: curator.programId,
+        kaminoKlendReserve: curator.programId,
+        kaminoKlendLiquiditySupply: curator.programId,
+        kaminoKlendCollateralMint: curator.programId,
+        kaminoKlendLendingMarket: curator.programId,
+        kaminoKlendLendingMarketAuthority: curator.programId,
+        kaminoKlendInstructionSysvar: curator.programId,
+        kaminoKlendLiquidityTokenProgram: curator.programId,
+        kaminoKlendPythOracle: curator.programId,
+        kaminoKlendSwitchboardPrice: curator.programId,
+        kaminoKlendSwitchboardTwap: curator.programId,
+        kaminoKlendScopePrices: curator.programId,
       } as any)
       .remainingAccounts(extras)
       .preInstructions([CU_LIMIT_IX]) // 600k CU — three nested CPIs blow past the 200k default
@@ -659,6 +678,21 @@ describe("clearstone-curator :: reallocate_to_market + mark_to_market", () => {
           coreEventAuthority: coreEventAuth,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
+          // Kamino-mode optional slots — generic adapter doesn't use them;
+          // pass curator.programId as the Anchor-0.31 sentinel for None
+          // (see longer note in the matching reallocate test above).
+          kaminoKlendProgram: curator.programId,
+          kaminoKlendReserve: curator.programId,
+          kaminoKlendLiquiditySupply: curator.programId,
+          kaminoKlendCollateralMint: curator.programId,
+          kaminoKlendLendingMarket: curator.programId,
+          kaminoKlendLendingMarketAuthority: curator.programId,
+          kaminoKlendInstructionSysvar: curator.programId,
+          kaminoKlendLiquidityTokenProgram: curator.programId,
+          kaminoKlendPythOracle: curator.programId,
+          kaminoKlendSwitchboardPrice: curator.programId,
+          kaminoKlendSwitchboardTwap: curator.programId,
+          kaminoKlendScopePrices: curator.programId,
         } as any)
         .remainingAccounts([])
         .signers([stack.curatorKp])

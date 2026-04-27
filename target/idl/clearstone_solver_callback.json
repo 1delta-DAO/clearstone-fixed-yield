@@ -1,0 +1,166 @@
+{
+  "address": "27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP",
+  "metadata": {
+    "name": "clearstone_solver_callback",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Reference callback program for clearstone_core.flash_swap_pt. Settles a clearstone-fusion order atomically against the flash-borrowed PT."
+  },
+  "instructions": [
+    {
+      "name": "on_flash_pt_received",
+      "docs": [
+        "Invoked by `clearstone_core.flash_swap_pt` after it has sent `pt_out` PT",
+        "to the solver's PT ATA. Handler must ensure `token_sy_escrow.amount`",
+        "grows by at least `sy_required` before returning — core enforces this",
+        "on its side via I-F2.",
+        "",
+        "`data` is a borsh-encoded `CallbackPayload` (see below)."
+      ],
+      "discriminator": [
+        206,
+        129,
+        57,
+        212,
+        98,
+        189,
+        226,
+        67
+      ],
+      "accounts": [
+        {
+          "name": "market"
+        },
+        {
+          "name": "caller_pt_dst",
+          "docs": [
+            "Solver's PT ATA. Core just deposited `pt_received` PT here.",
+            "Fusion.fill will move it to maker's PT ATA."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_sy_escrow",
+          "docs": [
+            "Market's SY escrow. Callback must top it up by `sy_required`."
+          ],
+          "writable": true
+        },
+        {
+          "name": "mint_sy",
+          "docs": [
+            "SY mint — used for `transfer_checked`."
+          ]
+        },
+        {
+          "name": "caller",
+          "docs": [
+            "Solver signs the outer tx; their signature is propagated here via CPI."
+          ],
+          "signer": true
+        },
+        {
+          "name": "core_token_program",
+          "docs": [
+            "Token program for the SY-escrow repay leg."
+          ]
+        },
+        {
+          "name": "fusion_program"
+        },
+        {
+          "name": "maker"
+        },
+        {
+          "name": "maker_receiver",
+          "writable": true
+        },
+        {
+          "name": "maker_src_ata",
+          "writable": true
+        },
+        {
+          "name": "taker_src_ata",
+          "docs": [
+            "Solver's src ATA. Fusion will credit it by the pulled amount.",
+            "This is where we pull our SY repayment from at the end."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maker_dst_ata",
+          "writable": true
+        },
+        {
+          "name": "src_mint"
+        },
+        {
+          "name": "dst_mint"
+        },
+        {
+          "name": "src_token_program"
+        },
+        {
+          "name": "dst_token_program"
+        },
+        {
+          "name": "delegate_authority"
+        },
+        {
+          "name": "order_state",
+          "writable": true
+        },
+        {
+          "name": "protocol_dst_acc",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "integrator_dst_acc",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "system_program"
+        },
+        {
+          "name": "associated_token_program"
+        },
+        {
+          "name": "instructions_sysvar"
+        }
+      ],
+      "args": [
+        {
+          "name": "pt_received",
+          "type": "u64"
+        },
+        {
+          "name": "sy_required",
+          "type": "u64"
+        },
+        {
+          "name": "data",
+          "type": "bytes"
+        }
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "MalformedPayload",
+      "msg": "callback_data could not be borsh-decoded as CallbackPayload"
+    },
+    {
+      "code": 6001,
+      "name": "UnsupportedSrcMint",
+      "msg": "Reference callback only supports orders where src_mint == market.mint_sy"
+    },
+    {
+      "code": 6002,
+      "name": "InsufficientPulledSrc",
+      "msg": "fusion.fill pulled less src than sy_required — order underfills the flash"
+    }
+  ]
+}

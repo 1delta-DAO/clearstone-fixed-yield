@@ -185,8 +185,13 @@ export type KaminoSyAdapter = {
           "name": "curator",
           "docs": [
             "Curator is the caller authorizing the init. When kyc_mode is GovernorWhitelist",
-            "they must be a governor root/admin — enforced by the governor CPI in M-KYC-3."
+            "they must be a governor root/admin — enforced by the governor CPI in M-KYC-3.",
+            "Marked `mut` because the governor CPI's `add_participant_via_pool` requires",
+            "the authority to be writable; without the annotation Anchor builds the outer",
+            "tx's AccountMeta read-only and the inner CPI fails with",
+            "\"writable privilege escalated\"."
           ],
+          "writable": true,
           "signer": true
         },
         {
@@ -235,10 +240,18 @@ export type KaminoSyAdapter = {
         },
         {
           "name": "poolConfig",
+          "docs": [
+            "`mut` because the governor CPI's `pool_config` slot is writable."
+          ],
+          "writable": true,
           "optional": true
         },
         {
           "name": "dmMintConfig",
+          "docs": [
+            "`mut` because the governor CPI's `dm_mint_config` slot is writable."
+          ],
+          "writable": true,
           "optional": true
         },
         {
@@ -325,6 +338,38 @@ export type KaminoSyAdapter = {
         },
         {
           "name": "tokenProgram"
+        },
+        {
+          "name": "klendLendingMarket",
+          "optional": true
+        },
+        {
+          "name": "klendLendingMarketAuthority",
+          "optional": true
+        },
+        {
+          "name": "klendInstructionSysvar",
+          "optional": true
+        },
+        {
+          "name": "klendLiquidityTokenProgram",
+          "optional": true
+        },
+        {
+          "name": "klendPythOracle",
+          "optional": true
+        },
+        {
+          "name": "klendSwitchboardPrice",
+          "optional": true
+        },
+        {
+          "name": "klendSwitchboardTwap",
+          "optional": true
+        },
+        {
+          "name": "klendScopePrices",
+          "optional": true
         }
       ],
       "args": [
@@ -392,6 +437,38 @@ export type KaminoSyAdapter = {
         },
         {
           "name": "tokenProgram"
+        },
+        {
+          "name": "klendLendingMarket",
+          "optional": true
+        },
+        {
+          "name": "klendLendingMarketAuthority",
+          "optional": true
+        },
+        {
+          "name": "klendInstructionSysvar",
+          "optional": true
+        },
+        {
+          "name": "klendLiquidityTokenProgram",
+          "optional": true
+        },
+        {
+          "name": "klendPythOracle",
+          "optional": true
+        },
+        {
+          "name": "klendSwitchboardPrice",
+          "optional": true
+        },
+        {
+          "name": "klendSwitchboardTwap",
+          "optional": true
+        },
+        {
+          "name": "klendScopePrices",
+          "optional": true
         }
       ],
       "args": [
@@ -531,6 +608,11 @@ export type KaminoSyAdapter = {
       "code": 6008,
       "name": "reserveDataMalformed",
       "msg": "Reserve account data malformed / unexpected layout"
+    },
+    {
+      "code": 6009,
+      "name": "missingRealKlendAccount",
+      "msg": "Real klend reserve detected but required account (lending_market / lending_market_authority / instruction_sysvar / liquidity_token_program) not provided"
     }
   ],
   "types": [

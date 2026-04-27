@@ -15,7 +15,9 @@
       "soBytes": 1243120,
       "deployedAt": "2026-04-25",
       "deployTx": "648My2i2WHJB4NZroooVz8hY1Wqk6diWmTy1pN4X7rZaHD3UmBVvDVoPJKsXidEAamqUrFQM4QracrJTKixUf33H",
-      "note": "Rotated 2026-04-25 from EKpLcVc6... (now closed). Includes the TradePt::try_accounts BPF stack-overflow fix shipped in this session."
+      "onChainSha256": "cd3e80daa2f9085603131c87e1f3919733e256f517499928cc645ae3ad0bce42",
+      "pinnedCommit": "f2aec2d",
+      "note": "Rotated 2026-04-25 from EKpLcVc6... (now closed). Includes the TradePt::try_accounts BPF stack-overflow fix shipped in this session. On-chain hash captured 2026-04-25 via solana-verify --on-chain; reproducible-build comparison pending (needs docker)."
     },
     "generic_exchange_rate_sy": {
       "programId": "HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3",
@@ -24,6 +26,8 @@
       "soPath": "target/deploy/generic_exchange_rate_sy.so",
       "soBytes": 395960,
       "deployedAt": "2026-04-25",
+      "onChainSha256": "725b0b886873d1a7c2e329717b0848599119c40ba6695886925ed4d5540e7799",
+      "pinnedCommit": "f2aec2d",
       "note": "Rotated 2026-04-25 from DZEqpkc... (now closed)."
     },
     "kamino_sy_adapter": {
@@ -31,10 +35,12 @@
       "status": "live",
       "tier": 2,
       "soPath": "target/deploy/kamino_sy_adapter.so",
-      "soBytes": 426944,
-      "deployedAt": "2026-04-24",
-      "deployTx": "4QHpetcoQFP39ntyqgvTP2WakMWuMbUHY1SqAJLWvm6BEGYS2YrPqQVZ3Tyik2FFnVe3SWCNqp39KxEde3Jbwxcf",
-      "note": "Original deploy 2026-04-24. Authority transferred to cold key 2026-04-25."
+      "soBytes": 515624,
+      "deployedAt": "2026-04-26",
+      "deployTx": "3xoqgcoK2gG6fJ5MG8Go2hv9TJUUEozG7rcP6Mpo8HcMM22yiiiZmqzFxAt18tZ5W92k6dXAwfYRmXidgs7Y3ZxE",
+      "onChainSha256": null,
+      "pinnedCommit": "pending",
+      "note": "Upgraded 2026-04-26 to support real-klend CPI shape (12-account deposit/redeem + internal RefreshReserve). Dispatches on reserve_data.len()==8624 → real-klend path; else legacy mock-klend. Preflight against D4qXufDqB… confirms dispatch + 12-account validation works end-to-end through klend's RefreshReserve; on-devnet mint exercise gated on stale pyth oracle freshness (config, not code). See FOLLOWUP_KAMINO_REAL_KLEND.md. Original deploy 2026-04-24, authority transferred to cold 2026-04-25."
     },
     "clearstone_rewards": {
       "programId": "7ddrynBQiCNjxejxRwxvSbDb56k8F8Yp4KwYgfiaHX8g",
@@ -42,7 +48,9 @@
       "tier": 3,
       "soPath": "target/deploy/clearstone_rewards.so",
       "soBytes": 437112,
-      "deployedAt": "2026-04-24"
+      "deployedAt": "2026-04-24",
+      "onChainSha256": "295f42af77adefad5bf9b7a34d3be5b6fca1d10af2c062acdaae0856106f1c81",
+      "pinnedCommit": "f2aec2d"
     },
     "clearstone_router": {
       "programId": "DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW",
@@ -51,6 +59,8 @@
       "soPath": "target/deploy/clearstone_router.so",
       "soBytes": 609864,
       "deployedAt": "2026-04-25",
+      "onChainSha256": "efea62f6ece1d5cd3f5d8f78adc5d4ca82c7c565ee15ca400575188bd42e38b5",
+      "pinnedCommit": "f2aec2d",
       "note": "Upgraded 2026-04-25 to pick up new core CPI ID."
     },
     "clearstone_curator": {
@@ -60,6 +70,8 @@
       "soPath": "target/deploy/clearstone_curator.so",
       "soBytes": 708600,
       "deployedAt": "2026-04-25",
+      "onChainSha256": "9f4d619a7e016b6691c9156df325545f9c437e4b2176e5f7ffc42edd8ec76662",
+      "pinnedCommit": "f2aec2d",
       "note": "Upgraded 2026-04-25 to pick up new core CPI ID."
     },
     "clearstone_solver_callback": {
@@ -113,5 +125,119 @@
     "skipTestOnly": 4,
     "closed": 2,
     "note": "All 6 shipped programs (Tiers 2 + 3) are live on devnet under unified cold authority Hro4y3X.... Only solver_callback remains: not in workspace.members yet — decide ship-or-defer for v1. For future large-program upgrades, use the separated strategy: `solana program write-buffer --buffer <kp> --max-sign-attempts 60 --use-rpc --with-compute-unit-price 200000` (retryable), then `solana program deploy --buffer <kp> --program-id <program-kp>`."
+  },
+  "external": {
+    "_note": "External (non-clearstone) program addresses we depend on: klend, the lending market, and the canonical Solstice USDC reserve (the production-path reserve the USX flow already exercises, with a working pyth oracle).",
+    "klendProgram": "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD",
+    "klendLendingMarket": "45FNL648aXgbMoMzLfYE2vCZAtWWDCky2tYLCEUztc98",
+    "metaplexTokenMetadata": "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",
+    "solstice": {
+      "usdcMint": "8iBux2LRja1PhVZph8Rw4Hi45pgkaufNEiaZma5nTD5g",
+      "usdcMintAuthority": "5RabYeYt19sor9RvExkiRvv1T9rWje5hPW7xeYXB6quQ",
+      "usdcMintNote": "Solstice USDC; canonical devnet USDC for borrowing/USX flow. Mint authority not held by us — acquire balances via Solstice's faucet/flow.",
+      "klendReserveActive": "AYhwFLgzxWwqznhxv6Bg1NVnNeoDNu9SBGLzM1W3hSfb",
+      "klendReserveStatus": 0,
+      "klendReservePyth": "EN2FsFZFdpiFAWpKDZqeJ2PY8EyE7xzz9Ew8ZQVhtHCJ",
+      "klendReserveNote": "Active reserve, status=0; ~506 USDC available, already borrowed against. pyth_v2 oracle EN2FsFZF… is being kept fresh by the production USX flow — klend's RefreshReserve passes against it. Use this as the kamino_sy_adapter's klend_reserve.",
+      "klendReservesObsoleted": [
+        "HCQrPVyfPxqzTLwmEBb1Fo91JcNeCb6gsCT5B9PRxBhV",
+        "GwcTF1uxH7SCmRjo5dGb121daRaDXod3tJcY8CPofgtf"
+      ],
+      "klendReservesObsoletedNote": "Both status=2 (hidden) — earlier deploy attempts left these around; ignore."
+    }
+  },
+  "kaminoStack": {
+    "_note": "Kamino-SY stack on Solstice USDC, FULL flow live 2026-04-26: init_sy_params → curator initialize_vault → setupVaultOverKamino (PT/YT vault) → strip → setupMarketOverKamino (AMM) → set_allocations → reallocate_to_market all green. The curator was upgraded 2026-04-26 to dispatch on sy_program ID — when sy_program == kamino_sy_adapter, it builds a 20-account real-klend mint_sy CPI from new optional Kamino fields on ReallocateToMarket. reallocate_from_market and crank_roll_delegated still use the legacy generic-only path; they're symmetric and tractable as a follow-up.",
+    "lastUpdated": "2026-04-26",
+    "baseMint": "8iBux2LRja1PhVZph8Rw4Hi45pgkaufNEiaZma5nTD5g",
+    "syAdapter": "kamino_sy_adapter",
+    "klendReserve": "AYhwFLgzxWwqznhxv6Bg1NVnNeoDNu9SBGLzM1W3hSfb",
+    "klendCollateralMint": "74Wcd7VSUjK4wABMF15Kc4fYqiPDNj4NmE9MMSUR3AJv",
+    "klendPyth": "EN2FsFZFdpiFAWpKDZqeJ2PY8EyE7xzz9Ew8ZQVhtHCJ",
+    "syMetadata": "7F6vSabYg9eke3iPbzsBigX9FL2e9JZS2rZN57V9Sja2",
+    "syMint": "2vyiNved2xwKortbH1fERsWPjZLijtiJBaqoqT96EsGX",
+    "collateralVault": "DVaaxn11tDrVXuAYBfqfuRtnRVEH6RJFEmVg68eJp6Ac",
+    "poolEscrow": "8cubBJT1WYyEUSfPWEcoy84EptgoCsjdy5uKqJt5S4VY",
+    "curatorVault": "BDe2V5UxMEpJjb4H5UbLPK5UAsi1jUaUs2zx62YiCrZo",
+    "curatorBaseEscrow": "8iSKQBGTKWahoRoTvbpKqb1U1BdS88rmMLiP37h5pLKW",
+    "ptVault": "DJhsAvfH67DRHvZSYMjHMQchVd77zTSCq62BNXEqu8ze",
+    "vaultAuthority": "9aVE4b6RasHNN6uzPHqfUVZrbgMpyvu3eGTdUCyebWWA",
+    "mintPt": "5yKkeK83FNECQLEr37rQqaWANEkAJSnTQCgigWDCcwvm",
+    "mintYt": "FhosjjdpHjYzzkw6swjQC5wc8t3D751txxJgo38ZmBq8",
+    "ammMarket": "HJmpC6EK8EfJyEwoSEwwgieKR1uPQbb755zq5gDjouZB",
+    "mintLp": "52m4zmeCqY91cBdzMYMLhigVT1yiLTPKHd1NFrSep1Q4",
+    "marketAlt": "365QNLt7jPou6v9zT1b2fdR65FwV2j3KeQLNEzvx6Mzv",
+    "ptVaultMaturity": "30 days from setup (~2026-05-26)",
+    "lastInitTxs": {
+      "initSyParams": "vU2FLvacLPTz5HKesHNAeaBB2fLMSF6ZU6r4Lc8PwccJMYLcKpCzshmRuKvDHwLth9Mgv9FpNKhBFqpiDur3pzh",
+      "initializeCuratorVault": "5GBVksq6ZP1LEynmwUqnCmmKLfQhnGkJ8Mry1xF4qbbj54VfBkyzpqmAuNeh1a25MvVFy9k8GRNgvzvvBk3V7tKV",
+      "preflightMintSy": "45aCzuhe32CxPus1sQA5ZDKMFG9D2ijXqS8MgWd7eYVhazyD3xCYdYHhvaJgFfDkGgXBBcEV7B74dx5SZME7PEw1",
+      "curatorUpgradeV1": "5xrTJgXu3uFcoqSqKzf29hZe9LF28yzXahUxAouRokNdrsPj88yeuKZxmwXeo8853b2S8129udrQA5N2zLcfT2s3",
+      "curatorUpgradeV2_mut_markers": "3Nw9XroQGJaUbsi8uXjQHVJNUmTkQYxYqbfCCJJHgZenbkkyMZpPbwS2R3UzdCiZpy8f1HVNbXREZ9NHZu5ceTyu",
+      "reallocateToMarket": "3XJAqS6wkRegm2qDdWX31zX5mXTuQHfMzpD7xiMAJWD4SezyriSFWDL4fprvVXbLXT6P7mDvKF4X8qpb4vLMsn9z"
+    },
+    "results": {
+      "syMintedFromUsdc": 5995519,
+      "ptStripped": 2001496,
+      "ytStripped": 2001496,
+      "ammPtSeed": 500000,
+      "ammSySeed": 500000,
+      "allocationCount": 1,
+      "reallocatedBase": 2000000,
+      "deployedBase0AfterReallocate": 2000000
+    }
+  },
+  "canonicalStack": {
+    "_note": "USDC-backed PT/YT stack stood up by scripts/setup-devnet-usdc-stack.ts on 2026-04-25. Bound to TEST USDC (2tboZ…), NOT canonical Solstice USDC. SUPERSEDED by `kaminoStack` (Solstice-USDC-backed) once steps 2+3 land. Kept here for the on-chain decoder regression tests until Kamino-stack PT/AMM is ready.",
+    "lastE2E": "2026-04-25",
+    "baseMint": "2tboZ672zptawbXLUrcqfF7YkkS1kzDS4ewwxtjuog1G",
+    "baseMintNote": "Test USDC, klend-reserve liquidity mint, mint authority = AhKNm…",
+    "syAdapter": "generic_exchange_rate_sy",
+    "syMarket": "3yyrgJCEnNZQbN3eHoP246viEfrngHU6R7wrRJttW1U9",
+    "syMint": "AeS5fqx1tSiTHMhuCzKzrXgKz24qApVqU8mM9i47jGQr",
+    "syBaseVault": "5JCEVZpNfHDZpfQFkBpZXBmVmD3faXK3BwJ2iJsfZpx3",
+    "syPoolEscrow": "2feAkSKmHyq23KYcczNt1P3Dq8qn9H1BUv1qeLmbGL7z",
+    "vault": "3GxRCCqtSjf9NpMdqFbTsSKdnc7yseppyKoTfuUvoKtz",
+    "vaultAuthority": "33jAGhS5g2Ar5G381y8Sc9efMcDoqeeifDW3oahQM51T",
+    "mintPt": "E95GtsvrpJWsHFN3do6itmXw73m1owRkEnCLS7FB7rwD",
+    "mintYt": "Hh2igJmzyXAG8Htjx5c8jKmDLnbRFMUxUH6TL1QPgCTM",
+    "market": "9DtXvD662X8RBUK5GeEsSxWPpWYz9DwQ1efmzF53Virz",
+    "mintLp": "EpctHDaEaCfuwr18on7hd9K1NaPTqdRk2jWjWDdTG2sh",
+    "marketEscrowPt": "FaJEKU3BLz1rgm1u8DDiM5PpxUZYypXBUKbeuqhaH6Er",
+    "marketEscrowSy": "7mHfH7V7hzyYQpG2yR3HEjt4zWwiqCYbXTWMwcrjfhvg",
+    "marketAlt": "CNWub9Mz2FpcbukLoSuqCBSMTsHSk7h8xw73W5WHczma",
+    "curatorVault": "Fv8WuFXpDNmCq5Hnky7NAhf1adeMjUqLBiVsUHwYaSzR",
+    "curatorBaseEscrow": "DQp4TcEWCDu8umuoiC73LDuDtY2aKeDvVdaM3R1jm3Va",
+    "kaminoSyMetadataObsoleted": "Eor3cyHBmiSy58DUrcAvFyT226AiJoRNPexN2VnAK7fM",
+    "kaminoKusdcMintObsoleted": "uwZ9tzdsGTk3oibQQP67scG8DththWuPqS7wKrA5XHf",
+    "kaminoNote": "Old kamino SY metadata bound to test USDC (2tboZ…). Superseded by kaminoStack.syMetadata which uses Solstice USDC (8iBux…) and the production-path klend reserve.",
+    "results": {
+      "stripPtMintedToPayer": 20000000,
+      "curatorDeposited": 100000000,
+      "curatorReallocated": 20000000,
+      "curatorDeployedBase0": 19990452,
+      "curatorTotalAssets": 99990452,
+      "curatorTotalShares": 100000000
+    }
+  },
+  "programGraph": {
+    "_note": "What's on devnet vs not, and why.",
+    "live": [
+      "clearstone_core: tier-2, the on-chain core program; everything CPIs through here.",
+      "generic_exchange_rate_sy: tier-2, reference SY adapter for arbitrary base mints.",
+      "kamino_sy_adapter: tier-2, real SY surface; Kamino-style fixed-yield wrapper.",
+      "clearstone_rewards: tier-3, MasterChef-style farms; staked LP earns reward emissions.",
+      "clearstone_curator: tier-3, MetaMorpho-style; routes base across whitelisted markets.",
+      "clearstone_router: tier-3, base-asset UX over core (12 wrappers)."
+    ],
+    "clonedFromMainnet": [
+      "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s — Metaplex Token Metadata. NOT our program; cloned via [[test.validator.clone]] in Anchor.toml so initialize_vault's create_metadata CPI resolves on devnet."
+    ],
+    "deliberatelyNotShipped": [
+      "malicious_sy_nonsense: test-only mock, returns garbage SY state; lives in reference_adapters/.",
+      "malicious_sy_reentrant: test-only mock, CPIs back into core during deposit_sy; lives in reference_adapters/.",
+      "mock_klend / mock_flash_callback: test-only mocks for solver/flash flows.",
+      "clearstone_solver_callback: not yet in workspace.members; ship-or-defer decision for v1."
+    ]
   }
 }

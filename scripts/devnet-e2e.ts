@@ -163,6 +163,12 @@ async function main() {
     maxPySupply: new BN("1000000000000"),
     minOpSizeStrip: new BN(1),
     minOpSizeMerge: new BN(1),
+    // Flip to true to smoke-test the production initialize_vault path
+    // — i.e., to actually exercise the Metaplex CreateMetadataAccountV3
+    // CPI on a live cluster. Tests skip this because the CPI tripped
+    // an Anchor-0.31 runtime quirk locally; devnet has the real
+    // Metaplex program deployed at metaqbxxU…, so this should land.
+    enableMetadata: true,
   });
   log("vault", vault.vault.publicKey);
   log("vault authority", vault.authority);

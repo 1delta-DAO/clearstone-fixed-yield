@@ -52,6 +52,15 @@ yarn run tsx scripts/devnet-e2e.ts             # SY → vault → market → rou
   harvest_fees → farm_state). Prints canonical handles to paste
   into DEPLOY_IDS.md. Each run creates fresh PDAs; previous handles
   remain live.
+- **`devnet-health.ts`** — daily snapshot of the live stack: hits
+  every `programs.*` entry in `deployments/devnet.json` with
+  status="live", checks the program account exists + is owned by
+  the upgradeable BPF loader, fetches the program-data, asserts
+  upgrade authority matches `upgradeAuthority` in the manifest,
+  prints the last update slot, and computes the on-chain ELF
+  sha256. Diverging hash from the manifest is logged but doesn't
+  fail (it's expected after an upgrade); auth mismatch fails loudly
+  and exits non-zero. Suitable for cron.
 
 ## Gotchas
 

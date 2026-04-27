@@ -1,0 +1,56 @@
+name: devnet-e2e-refresh
+
+# Weekly canonical-stack refresh: stands up a fresh SY → vault → market
+# → curator → farm stack against the live devnet programs and prints the
+# new pubkeys to the Actions log. Cuts an issue if anything fails so a
+# real human notices that integrators may be staring at a broken stack.
+#
+# Does NOT auto-update deployments/devnet.json — handle changes are
+# treated as significant enough to want a manual PR. The script's
+# stdout includes a paste-ready block.
+#
+# Runs every Monday at 09:00 UTC. Requires the devnet deployer wallet
+# as a repo secret (DEVNET_DEPLOYER_KEYPAIR_JSON, holding the JSON-
+# encoded keypair file contents).
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "yarn"
+
+      - name: Install deps
+        run: yarn install --frozen-lockfile
+
+      - name: Materialize deployer keypair
+        env:
+          DEVNET_DEPLOYER_KEYPAIR_JSON: ${{ secrets.DEVNET_DEPLOYER_KEYPAIR_JSON }}
+        run: |
+          mkdir -p ~/.config/solana
+          echo "$DEVNET_DEPLOYER_KEYPAIR_JSON" > ~/.config/solana/clearstone-devnet.json
+          chmod 600 ~/.config/solana/clearstone-devnet.json
+
+      - name: Run devnet e2e
+        env:
+          ANCHOR_PROVIDER_URL: https://api.devnet.solana.com
+          ANCHOR_WALLET: /home/runner/.config/solana/clearstone-devnet.json
+        run: yarn run tsx scripts/devnet-e2e.ts
+
+      - name: Surface canonical handles in summary
+        if: always()
+        run: |
+          echo "## Devnet e2e — $(date -u +%Y-%m-%dT%H:%MZ)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "If green, paste the canonical handles block from the run log into" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`deployments/devnet.json\` \`canonicalStack\` and bump \`lastE2E\`." >> "$GITHUB_STEP_SUMMARY"

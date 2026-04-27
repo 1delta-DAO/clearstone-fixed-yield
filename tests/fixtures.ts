@@ -334,19 +334,50 @@ export async function mintSyForUser(params: {
   user: Keypair;
   handles: SyMarketHandles;
   amountBase: anchor.BN;
+  /**
+   * Optional: payer + base mint authority. If supplied, the helper
+   * ensures the user's base ATA exists and has at least `amountBase`
+   * minted into it before swapping to SY. Older callers fund the ATA
+   * themselves and omit this; newer flows (fresh sub-users like
+   * solver/maker keypairs) lean on this so the helper is one-shot.
+   */
+  payer?: Keypair;
+  baseMintAuthority?: Keypair;
 }): Promise<PublicKey> {
-  const { program, connection, user, handles, amountBase } = params;
+  const { program, connection, user, handles, amountBase, payer, baseMintAuthority } = params;
 
   const syAta = await getOrCreateAssociatedTokenAccount(
     connection,
-    user,
+    payer ?? user,
     handles.syMint,
     user.publicKey
   );
-  const baseAta = getAssociatedTokenAddressSync(
-    handles.baseMint,
-    user.publicKey
-  );
+
+  // Ensure base ATA exists. If the caller gave us a payer, create it
+  // for them (idempotent if already there). Otherwise just derive the
+  // address — the caller is responsible for having created + funded it.
+  let baseAta: PublicKey;
+  if (payer) {
+    const acc = await getOrCreateAssociatedTokenAccount(
+      connection,
+      payer,
+      handles.baseMint,
+      user.publicKey
+    );
+    baseAta = acc.address;
+    if (baseMintAuthority) {
+      await mintTo(
+        connection,
+        payer,
+        handles.baseMint,
+        baseAta,
+        baseMintAuthority,
+        BigInt(amountBase.toString())
+      );
+    }
+  } else {
+    baseAta = getAssociatedTokenAddressSync(handles.baseMint, user.publicKey);
+  }
 
   await program.methods
     .mintSy(amountBase)
@@ -449,15 +480,61 @@ export async function createAndExtendAlt(params: {
     }
   }
 
-  // 2s grace: solana-test-validator's simulation endpoint can lag the
-  // confirmed cursor on the first ALT of a run. An empirical 2s gives
-  // the preflight simulator enough time to see the populated ALT.
-  await sleep(2000);
+  // 5s grace: even with `confirmed` polling above, the very first ALT
+  // of a fresh validator session can be invisible to *both* preflight
+  // simulation and the on-chain bank that processes the next tx for
+  // several seconds — a tx that calls `deserialize_lookup_table` on
+  // a brand-new ALT can come back with an empty addresses vec, which
+  // then makes the inner deposit_sy CPI reference pubkeys not in the
+  // outer tx and revert with `MissingAccount`. Empirically 4s clears
+  // it; 5s gives a small safety margin without dragging the suite.
+  await sleep(5000);
   return altAddress;
 }
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Retry a function up to 3 times if it throws a preflight "missing
+ * account" / "unknown account" error. These show up on the first
+ * market-ALT used in a fresh validator session because the simulator's
+ * account cache lags the confirmed cursor — the ALT is on-chain
+ * (verified post-extend) but preflight still sees a stale view. The 2s
+ * grace in createAndExtendAlt handles most of it; the retry catches
+ * cold-start tails without bumping the grace globally.
+ */
+export async function retryOnAltCacheLag<T>(fn: () => Promise<T>): Promise<T> {
+  const isAltLag = (e: any): boolean => {
+    const parts = [
+      e?.message,
+      e?.toString?.(),
+      Array.isArray(e?.logs) ? e.logs.join("\n") : undefined,
+      String(e),
+    ].filter(Boolean);
+    const blob = parts.join("\n");
+    return (
+      blob.includes("An account required by the instruction is missing") ||
+      blob.includes("Instruction references an unknown account")
+    );
+  };
+
+  let lastErr: any;
+  // Up to 4 attempts at 5s spacing: the validator's simulator-cache
+  // lag on the first ALT of a session can run past 10s in cold-start
+  // conditions, so a tight retry loop catches it without dragging out
+  // the steady-state common case.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      if (!isAltLag(e)) throw e;
+      lastErr = e;
+      await sleep(5000);
+    }
+  }
+  throw lastErr;
 }
 
 /**
@@ -590,6 +667,14 @@ export interface SetupVaultParams {
   maxPySupply: anchor.BN;
   minOpSizeStrip: anchor.BN;
   minOpSizeMerge: anchor.BN;
+  /**
+   * Drives `enable_metadata` on initialize_vault. Defaults to false
+   * because the Metaplex CPI tripped a runtime account-resolution
+   * issue under Anchor 0.31 and most tests don't need PT metadata
+   * anyway. The devnet-e2e script flips this to true to smoke-test
+   * the production path.
+   */
+  enableMetadata?: boolean;
 }
 
 export async function setupVault(params: SetupVaultParams): Promise<VaultHandles> {
@@ -607,6 +692,7 @@ export async function setupVault(params: SetupVaultParams): Promise<VaultHandles
     maxPySupply,
     minOpSizeStrip,
     minOpSizeMerge,
+    enableMetadata = false,
   } = params;
 
   const corePid = core.programId;
@@ -702,7 +788,7 @@ export async function setupVault(params: SetupVaultParams): Promise<VaultHandles
       creatorFeeBps,
       maxPySupply,
       [], // emissions_seed: none by default; tests that need rewards seed inline
-      false // enable_metadata: skip Metaplex CPI in tests
+      enableMetadata // false by default; devnet-e2e flips it to true
     )
     .accounts({
       payer: payer.publicKey,
@@ -866,43 +952,54 @@ export async function setupMarket(params: SetupMarketParams): Promise<MarketHand
     { pubkey: syHandles.poolEscrow, isSigner: false, isWritable: true },
   ];
 
-  await core.methods
-    .initMarketTwo(
-      lnFeeRateRoot,
-      rateScalarRoot,
-      initRateAnchor,
-      numberFromU64(syExchangeRate) as any,
-      ptInit,
-      syInit,
-      feeTreasurySyBps,
-      cpiAccounts,
-      seedId,
-      curator,
-      creatorFeeBps
-    )
-    .accounts({
-      payer: payer.publicKey,
-      market,
-      vault: vaultHandles.vault.publicKey,
-      mintSy: syHandles.syMint,
-      mintPt: vaultHandles.mintPt,
-      mintLp,
-      escrowPt,
-      escrowSy,
-      ptSrc,
-      sySrc,
-      lpDst,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-      syProgram: adapterPid,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      addressLookupTable: alt,
-      tokenTreasuryFeeSy,
-    } as any)
-    .remainingAccounts(remainingAccounts)
-    .preInstructions([CU_LIMIT_IX])
-    .signers([payer])
-    .rpc();
+  await retryOnAltCacheLag(() =>
+    core.methods
+      .initMarketTwo(
+        lnFeeRateRoot,
+        rateScalarRoot,
+        initRateAnchor,
+        numberFromU64(syExchangeRate) as any,
+        ptInit,
+        syInit,
+        feeTreasurySyBps,
+        cpiAccounts,
+        seedId,
+        curator,
+        creatorFeeBps
+      )
+      .accounts({
+        payer: payer.publicKey,
+        market,
+        vault: vaultHandles.vault.publicKey,
+        mintSy: syHandles.syMint,
+        mintPt: vaultHandles.mintPt,
+        mintLp,
+        escrowPt,
+        escrowSy,
+        ptSrc,
+        sySrc,
+        lpDst,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        syProgram: adapterPid,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        addressLookupTable: alt,
+        tokenTreasuryFeeSy,
+      } as any)
+      .remainingAccounts(remainingAccounts)
+      .preInstructions([CU_LIMIT_IX])
+      .signers([payer])
+      // skipPreflight: on the FIRST market-ALT in a fresh validator
+      // session the simulator's account cache lags the confirmed cursor
+      // and rejects the deposit_sy CPI's ALT-resolved account_metas
+      // (the ALT IS populated on-chain — `createAndExtendAlt` blocks on
+      // it — but preflight reads a stale view). The actual on-chain
+      // runtime sees the ALT correctly, so bypassing preflight gives
+      // the right behavior. retryOnAltCacheLag still wraps this in case
+      // a different ALT-cache-lag surface (e.g. the `confirmed` fetch
+      // in .rpc() itself) needs a re-attempt.
+      .rpc({ skipPreflight: true })
+  );
 
   return {
     market,
@@ -1196,28 +1293,33 @@ export async function strip(args: StripArgs): Promise<string> {
     extraAccounts,
   } = args;
 
-  return core.methods
-    .strip(amount)
-    .accounts({
-      depositor: depositor.publicKey,
-      authority: vault.authority,
-      vault: vault.vault.publicKey,
-      sySrc,
-      escrowSy: vault.escrowSy,
-      ytDst,
-      ptDst,
-      mintYt: vault.mintYt,
-      mintPt: vault.mintPt,
-      mintSy,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      addressLookupTable: vault.alt,
-      syProgram,
-      yieldPosition: vault.yieldPosition,
-    } as any)
-    .remainingAccounts(extraAccounts)
-    .preInstructions([CU_LIMIT_IX])
-    .signers([depositor])
-    .rpc();
+  // Wrap in retryOnAltCacheLag — the strip's deposit_sy CPI resolves
+  // accounts via the vault ALT, and the simulator can lag behind the
+  // confirmed ALT cursor on a fresh validator's first uses.
+  return retryOnAltCacheLag(() =>
+    core.methods
+      .strip(amount)
+      .accounts({
+        depositor: depositor.publicKey,
+        authority: vault.authority,
+        vault: vault.vault.publicKey,
+        sySrc,
+        escrowSy: vault.escrowSy,
+        ytDst,
+        ptDst,
+        mintYt: vault.mintYt,
+        mintPt: vault.mintPt,
+        mintSy,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        addressLookupTable: vault.alt,
+        syProgram,
+        yieldPosition: vault.yieldPosition,
+      } as any)
+      .remainingAccounts(extraAccounts)
+      .preInstructions([CU_LIMIT_IX])
+      .signers([depositor])
+      .rpc()
+  );
 }
 
 /** Convenience wrapper around `strip` for the generic adapter. */
@@ -1256,10 +1358,12 @@ export interface MergeArgs {
   ytSrc: PublicKey;
   ptSrc: PublicKey;
   amount: anchor.BN;
+  /** Override the default generic-adapter extra accounts (kamino needs klend_reserve). */
+  extraAccounts?: anchor.web3.AccountMeta[];
 }
 
 export async function merge(args: MergeArgs): Promise<string> {
-  const { core, adapter, owner, sy, vault, syDst, ytSrc, ptSrc, amount } = args;
+  const { core, adapter, owner, sy, vault, syDst, ytSrc, ptSrc, amount, extraAccounts } = args;
 
   return core.methods
     .merge(amount)
@@ -1279,7 +1383,7 @@ export async function merge(args: MergeArgs): Promise<string> {
       addressLookupTable: vault.alt,
       yieldPosition: vault.yieldPosition,
     } as any)
-    .remainingAccounts(adapterExtraAccountsForVault(sy, vault.vaultPosition))
+    .remainingAccounts(extraAccounts ?? adapterExtraAccountsForVault(sy, vault.vaultPosition))
     .preInstructions([CU_LIMIT_IX])
     .signers([owner])
     .rpc();
@@ -1399,11 +1503,27 @@ export interface TradePtArgs {
   netTraderPt: anchor.BN;
   /** Slippage bound on SY. See trade_pt.rs header for sign convention. */
   syConstraint: anchor.BN;
+  /**
+   * Override the auto-derived adapter remaining-accounts. Kamino-style
+   * adapters need extra slots (klend_reserve) the generic helper doesn't
+   * know about, so callers can pass the full list directly.
+   */
+  extraAccounts?: anchor.web3.AccountMeta[];
 }
 
 export async function tradePt(args: TradePtArgs): Promise<string> {
-  const { core, adapter, trader, sy, market, traderSy, traderPt, netTraderPt, syConstraint } =
-    args;
+  const {
+    core,
+    adapter,
+    trader,
+    sy,
+    market,
+    traderSy,
+    traderPt,
+    netTraderPt,
+    syConstraint,
+    extraAccounts,
+  } = args;
 
   return core.methods
     .tradePt(netTraderPt, syConstraint)
@@ -1420,7 +1540,9 @@ export async function tradePt(args: TradePtArgs): Promise<string> {
       tokenFeeTreasurySy: market.tokenTreasuryFeeSy,
       mintSy: sy.syMint,
     } as any)
-    .remainingAccounts(adapterExtraAccountsForMarket(sy, market.marketPosition))
+    .remainingAccounts(
+      extraAccounts ?? adapterExtraAccountsForMarket(sy, market.marketPosition)
+    )
     .preInstructions([CU_LIMIT_IX])
     .signers([trader])
     .rpc();

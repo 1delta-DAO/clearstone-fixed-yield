@@ -58,6 +58,14 @@ fn callback_discriminator() -> [u8; 8] {
 #[event_cpi]
 #[derive(Accounts)]
 pub struct FlashSwapPt<'info> {
+    /// Marked `mut` so the account is writable in the outer tx — callbacks
+    /// like clearstone_solver_callback re-pass `caller` as the `taker` slot
+    /// in a fusion.fill CPI, and fusion's IDL declares `taker` as writable.
+    /// Without `mut`, the inner CPI's writable flag would be a privilege
+    /// escalation over the outer-tx readonly flag and the runtime would
+    /// reject the tx with "Cross-program invocation with unauthorized
+    /// signer or writable account".
+    #[account(mut)]
     pub caller: Signer<'info>,
 
     #[account(
@@ -167,9 +175,14 @@ pub fn handler<'info>(
     );
     let sy_exchange_rate = sy_state.exchange_rate;
 
-    // --- Step 3: quote the repayment (borrow means negative net_trader_pt) ---
+    // --- Step 3: quote the repayment ---
+    // Flash-borrowing PT is, from the trader's-balance perspective, identical
+    // to BUYING PT (positive net_trader_pt) — the trader receives PT and owes
+    // SY back to the market. The "loan" framing only adds the deferred-
+    // settlement window between transfer and repay; the curve math is the
+    // same as `trade_pt` with net_trader_pt = +pt_out.
     let fee_treasury_sy_bps = ctx.accounts.market.fee_treasury_sy_bps;
-    let net_trader_pt: i64 = -(pt_out as i64);
+    let net_trader_pt: i64 = pt_out as i64;
     let quote = ctx.accounts.market.financials.quote_trade_pt(
         sy_exchange_rate,
         net_trader_pt,
@@ -227,12 +240,18 @@ pub fn handler<'info>(
     // in every other mutating entrypoint would reject any nested flash; and
     // no other entrypoint takes `market` by writable handle without that
     // gate.
+    // `caller` is passed writable+signer so callbacks like
+    // clearstone_solver_callback can re-use it as the `taker` slot in
+    // a downstream fusion.fill CPI (fusion expects taker writable+
+    // signer). The outer tx's `caller: Signer` is itself a signer; the
+    // runtime allows `is_writable=true` here because the caller's
+    // wallet account is implicitly writable for fee payment regardless.
     let mut callback_accounts = vec![
         AccountMeta::new_readonly(ctx.accounts.market.key(), false),
         AccountMeta::new(ctx.accounts.caller_pt_dst.key(), false),
         AccountMeta::new(ctx.accounts.token_sy_escrow.key(), false),
         AccountMeta::new_readonly(ctx.accounts.mint_sy.key(), false),
-        AccountMeta::new_readonly(ctx.accounts.caller.key(), true),
+        AccountMeta::new(ctx.accounts.caller.key(), true),
         AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
     ];
     let mut callback_infos = vec![
