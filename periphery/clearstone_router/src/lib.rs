@@ -613,6 +613,71 @@ pub mod clearstone_router {
     ) -> Result<()> {
         withdraw_liquidity_cpi(&ctx, lp_in, min_pt_out, min_sy_out)
     }
+
+    /// Pure passthrough to `core.flash_swap_pt`. Solvers/keepers that already
+    /// speak the router's discriminator namespace can route flash borrows
+    /// here instead of needing core's program id directly. Account layout
+    /// + remaining_accounts are forwarded verbatim.
+    pub fn wrapper_flash_swap_pt<'info>(
+        ctx: Context<'_, '_, '_, 'info, WrapperFlashSwapPt<'info>>,
+        pt_out: u64,
+        callback_data: Vec<u8>,
+    ) -> Result<()> {
+        let accounts = clearstone_core::cpi::accounts::FlashSwapPt {
+            caller: ctx.accounts.caller.to_account_info(),
+            market: ctx.accounts.market.to_account_info(),
+            caller_pt_dst: ctx.accounts.caller_pt_dst.to_account_info(),
+            token_sy_escrow: ctx.accounts.token_sy_escrow.to_account_info(),
+            token_pt_escrow: ctx.accounts.token_pt_escrow.to_account_info(),
+            token_fee_treasury_sy: ctx.accounts.token_fee_treasury_sy.to_account_info(),
+            mint_sy: ctx.accounts.mint_sy.to_account_info(),
+            mint_pt: ctx.accounts.mint_pt.to_account_info(),
+            callback_program: ctx.accounts.callback_program.to_account_info(),
+            address_lookup_table: ctx.accounts.address_lookup_table.to_account_info(),
+            sy_program: ctx.accounts.sy_program.to_account_info(),
+            token_program: ctx.accounts.token_program.to_account_info(),
+            event_authority: ctx.accounts.core_event_authority.to_account_info(),
+            program: ctx.accounts.core_program.to_account_info(),
+        };
+        clearstone_core::cpi::flash_swap_pt(
+            CpiContext::new(ctx.accounts.core_program.to_account_info(), accounts)
+                .with_remaining_accounts(ctx.remaining_accounts.to_vec()),
+            pt_out,
+            callback_data,
+        )?;
+        Ok(())
+    }
+
+    /// Pure passthrough to `core.flash_swap_sy` (sell-PT direction).
+    pub fn wrapper_flash_swap_sy<'info>(
+        ctx: Context<'_, '_, '_, 'info, WrapperFlashSwapSy<'info>>,
+        pt_in: u64,
+        callback_data: Vec<u8>,
+    ) -> Result<()> {
+        let accounts = clearstone_core::cpi::accounts::FlashSwapSy {
+            caller: ctx.accounts.caller.to_account_info(),
+            market: ctx.accounts.market.to_account_info(),
+            caller_sy_dst: ctx.accounts.caller_sy_dst.to_account_info(),
+            token_sy_escrow: ctx.accounts.token_sy_escrow.to_account_info(),
+            token_pt_escrow: ctx.accounts.token_pt_escrow.to_account_info(),
+            token_fee_treasury_sy: ctx.accounts.token_fee_treasury_sy.to_account_info(),
+            mint_sy: ctx.accounts.mint_sy.to_account_info(),
+            mint_pt: ctx.accounts.mint_pt.to_account_info(),
+            callback_program: ctx.accounts.callback_program.to_account_info(),
+            address_lookup_table: ctx.accounts.address_lookup_table.to_account_info(),
+            sy_program: ctx.accounts.sy_program.to_account_info(),
+            token_program: ctx.accounts.token_program.to_account_info(),
+            event_authority: ctx.accounts.core_event_authority.to_account_info(),
+            program: ctx.accounts.core_program.to_account_info(),
+        };
+        clearstone_core::cpi::flash_swap_sy(
+            CpiContext::new(ctx.accounts.core_program.to_account_info(), accounts)
+                .with_remaining_accounts(ctx.remaining_accounts.to_vec()),
+            pt_in,
+            callback_data,
+        )?;
+        Ok(())
+    }
 }
 
 // ---------- CPI helpers ----------
@@ -1204,6 +1269,102 @@ pub struct WrapperWithdrawLiquidity<'info> {
     pub token_program: Program<'info, Token>,
     pub sy_program: Program<'info, GenericExchangeRateSy>,
     pub core_program: Program<'info, ClearstoneCore>,
+    /// CHECK: core_program's event_authority PDA.
+    pub core_event_authority: UncheckedAccount<'info>,
+}
+
+/// Mirror of `core::FlashSwapPt`'s account layout. Constraint annotations
+/// match core verbatim so a wrong-mint ATA / non-executable callback fails
+/// at the router boundary with the same diagnostic, instead of relying on
+/// the CPI to surface it. `core_program` + `core_event_authority` are the
+/// CPI-level extras Anchor's CPI builder needs.
+#[derive(Accounts)]
+pub struct WrapperFlashSwapPt<'info> {
+    #[account(mut)]
+    pub caller: Signer<'info>,
+
+    /// CHECK: forwarded verbatim to core.flash_swap_X — core's `Account<MarketTwo>`
+    /// + `has_one` constraints on the inner CPI re-validate the discriminator,
+    /// owner, and account linkages. No router-side derefs.
+    #[account(mut)]
+    pub market: AccountInfo<'info>,
+
+    #[account(mut, token::authority = caller, token::mint = mint_pt)]
+    pub caller_pt_dst: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut, token::mint = mint_sy)]
+    pub token_sy_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut, token::mint = mint_pt)]
+    pub token_pt_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut, token::mint = mint_sy)]
+    pub token_fee_treasury_sy: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
+    pub mint_pt: Box<InterfaceAccount<'info, Mint>>,
+
+    /// CHECK: caller-picked CPI target; core re-validates `executable`.
+    #[account(executable)]
+    pub callback_program: UncheckedAccount<'info>,
+
+    /// CHECK: validated by core via market.has_one.
+    pub address_lookup_table: UncheckedAccount<'info>,
+
+    /// CHECK: validated by core via market.has_one.
+    pub sy_program: UncheckedAccount<'info>,
+
+    pub token_program: Program<'info, Token>,
+
+    pub core_program: Program<'info, ClearstoneCore>,
+
+    /// CHECK: core_program's event_authority PDA.
+    pub core_event_authority: UncheckedAccount<'info>,
+}
+
+/// Mirror of `core::FlashSwapSy`. Same shape as the buy-side wrapper with
+/// `caller_pt_dst` replaced by `caller_sy_dst` (the borrow leg of the
+/// sell-PT direction is SY).
+#[derive(Accounts)]
+pub struct WrapperFlashSwapSy<'info> {
+    #[account(mut)]
+    pub caller: Signer<'info>,
+
+    /// CHECK: forwarded verbatim to core.flash_swap_X — core's `Account<MarketTwo>`
+    /// + `has_one` constraints on the inner CPI re-validate the discriminator,
+    /// owner, and account linkages. No router-side derefs.
+    #[account(mut)]
+    pub market: AccountInfo<'info>,
+
+    #[account(mut, token::authority = caller, token::mint = mint_sy)]
+    pub caller_sy_dst: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut, token::mint = mint_sy)]
+    pub token_sy_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut, token::mint = mint_pt)]
+    pub token_pt_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut, token::mint = mint_sy)]
+    pub token_fee_treasury_sy: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
+    pub mint_pt: Box<InterfaceAccount<'info, Mint>>,
+
+    /// CHECK: caller-picked CPI target; core re-validates `executable`.
+    #[account(executable)]
+    pub callback_program: UncheckedAccount<'info>,
+
+    /// CHECK: validated by core via market.has_one.
+    pub address_lookup_table: UncheckedAccount<'info>,
+
+    /// CHECK: validated by core via market.has_one.
+    pub sy_program: UncheckedAccount<'info>,
+
+    pub token_program: Program<'info, Token>,
+
+    pub core_program: Program<'info, ClearstoneCore>,
+
     /// CHECK: core_program's event_authority PDA.
     pub core_event_authority: UncheckedAccount<'info>,
 }

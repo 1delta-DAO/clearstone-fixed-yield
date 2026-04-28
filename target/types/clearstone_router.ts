@@ -332,6 +332,171 @@ export type ClearstoneRouter = {
       ]
     },
     {
+      "name": "wrapperFlashSwapPt",
+      "docs": [
+        "Pure passthrough to `core.flash_swap_pt`. Solvers/keepers that already",
+        "speak the router's discriminator namespace can route flash borrows",
+        "here instead of needing core's program id directly. Account layout",
+        "+ remaining_accounts are forwarded verbatim."
+      ],
+      "discriminator": [
+        19,
+        134,
+        64,
+        2,
+        74,
+        15,
+        48,
+        29
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "docs": [
+            "+ `has_one` constraints on the inner CPI re-validate the discriminator,",
+            "owner, and account linkages. No router-side derefs."
+          ],
+          "writable": true
+        },
+        {
+          "name": "callerPtDst",
+          "writable": true
+        },
+        {
+          "name": "tokenSyEscrow",
+          "writable": true
+        },
+        {
+          "name": "tokenPtEscrow",
+          "writable": true
+        },
+        {
+          "name": "tokenFeeTreasurySy",
+          "writable": true
+        },
+        {
+          "name": "mintSy"
+        },
+        {
+          "name": "mintPt"
+        },
+        {
+          "name": "callbackProgram"
+        },
+        {
+          "name": "addressLookupTable"
+        },
+        {
+          "name": "syProgram"
+        },
+        {
+          "name": "tokenProgram"
+        },
+        {
+          "name": "coreProgram"
+        },
+        {
+          "name": "coreEventAuthority"
+        }
+      ],
+      "args": [
+        {
+          "name": "ptOut",
+          "type": "u64"
+        },
+        {
+          "name": "callbackData",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "wrapperFlashSwapSy",
+      "docs": [
+        "Pure passthrough to `core.flash_swap_sy` (sell-PT direction)."
+      ],
+      "discriminator": [
+        105,
+        207,
+        235,
+        68,
+        93,
+        156,
+        154,
+        174
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "docs": [
+            "+ `has_one` constraints on the inner CPI re-validate the discriminator,",
+            "owner, and account linkages. No router-side derefs."
+          ],
+          "writable": true
+        },
+        {
+          "name": "callerSyDst",
+          "writable": true
+        },
+        {
+          "name": "tokenSyEscrow",
+          "writable": true
+        },
+        {
+          "name": "tokenPtEscrow",
+          "writable": true
+        },
+        {
+          "name": "tokenFeeTreasurySy",
+          "writable": true
+        },
+        {
+          "name": "mintSy"
+        },
+        {
+          "name": "mintPt"
+        },
+        {
+          "name": "callbackProgram"
+        },
+        {
+          "name": "addressLookupTable"
+        },
+        {
+          "name": "syProgram"
+        },
+        {
+          "name": "tokenProgram"
+        },
+        {
+          "name": "coreProgram"
+        },
+        {
+          "name": "coreEventAuthority"
+        }
+      ],
+      "args": [
+        {
+          "name": "ptIn",
+          "type": "u64"
+        },
+        {
+          "name": "callbackData",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
       "name": "wrapperMerge",
       "docs": [
         "PT + YT → base via (core.merge → adapter.redeem_sy)."

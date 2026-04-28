@@ -1,24 +1,32 @@
-// Reference callback program for `clearstone_core.flash_swap_pt`.
+// Reference callback program for `clearstone_core.flash_swap_pt` and
+// `clearstone_core.flash_swap_sy`.
 //
-// Settles a clearstone-fusion order atomically against a PT flash loan:
+// Two directions, mirror flows:
 //
-//   core.flash_swap_pt  ──┐  sends `pt_out` PT to solver's PT ATA
-//                        │
-//                        └─► this.on_flash_pt_received(pt_out, sy_required, data)
-//                              │
-//                              ├─► CPI clearstone_fusion.fill(order_config, amount)
-//                              │     pulls maker.src_ata  → solver.src_ata
-//                              │     transfers solver.pt_ata → maker.pt_ata
-//                              │
-//                              └─► transfer_checked solver.src_ata → market.sy_escrow
-//                                    (closes the flash; core verifies the delta)
+//   buy-PT (`on_flash_pt_received`):
+//     core.flash_swap_pt  ──┐  sends `pt_out` PT to solver's PT ATA
+//                          │
+//                          └─► CPI clearstone_fusion.fill(order, amount)
+//                                pulls maker.SY → solver.SY
+//                                delivers solver.PT → maker.PT
+//                          ──► transfer_checked solver.SY → market.sy_escrow
+//                                (closes the flash; core verifies the delta)
 //
-// SCOPE NOTE: this reference handles ONLY the case where the fusion order's
-// `src_mint == market.mint_sy`. That's the common shape for "sell SY for PT"
-// orders. For `src_mint = underlying-asset` we'd need an additional wrap step
+//   sell-PT (`on_flash_sy_received`):
+//     core.flash_swap_sy  ──┐  sends `sy_out` SY to solver's SY ATA
+//                          │
+//                          └─► CPI clearstone_fusion.fill(order, amount)
+//                                pulls maker.PT → solver.PT
+//                                delivers solver.SY → maker.SY
+//                          ──► transfer_checked solver.PT → market.pt_escrow
+//                                (closes the flash; core verifies the delta)
+//
+// SCOPE NOTE (buy-PT): handler requires `src_mint == market.mint_sy`. For
+// `src_mint = underlying-asset` we'd need an additional wrap step
 // (governor.wrap → adapter.mint_sy) inserted between fusion.fill and the
 // escrow repay — see INTENT_FLASH_PLAN.md §7.1 "Convert pulled src to SY".
-// A production callback extends this handler with that branch.
+// SCOPE NOTE (sell-PT): symmetric — handler requires `dst_mint == market.mint_sy`.
+// A production callback extends both branches with the underlying-asset path.
 //
 // Spec: INTENT_FLASH_PLAN.md §7.
 
@@ -135,6 +143,107 @@ pub mod clearstone_solver_callback {
         let _ = pt_received;
         Ok(())
     }
+
+    /// Sell-PT mirror: invoked by `clearstone_core.flash_swap_sy` after it has
+    /// sent `sy_received` SY to the solver's SY ATA. Handler must ensure
+    /// `token_pt_escrow.amount` grows by at least `pt_required` before
+    /// returning — core enforces this via I-F2 on the PT side.
+    ///
+    /// `data` is the same `CallbackPayload` shape as the buy-side; the
+    /// fusion order this time has `src_mint = mint_pt`, `dst_mint = mint_sy`.
+    pub fn on_flash_sy_received(
+        ctx: Context<OnFlashSyReceived>,
+        sy_received: u64,
+        pt_required: u64,
+        data: Vec<u8>,
+    ) -> Result<()> {
+        let payload = CallbackPayload::try_from_slice(&data)
+            .map_err(|_| error!(CallbackError::MalformedPayload))?;
+
+        // The reference supports dst == mint_sy only. The fusion order
+        // delivers SY to maker (paid from solver's flash-borrowed pool); we
+        // then transfer the maker's pulled PT into market.pt_escrow to
+        // close the flash.
+        require!(
+            ctx.accounts.dst_mint.key() == ctx.accounts.mint_sy.key(),
+            CallbackError::UnsupportedDstMint
+        );
+
+        // --- Step 1: fusion.fill — atomic pull-and-deliver ---
+        //
+        // Mirrors the buy-side, but with src/dst flipped:
+        //   maker.src (PT) → solver.taker_src_ata (PT)
+        //   solver.taker_dst_ata (SY = caller_sy_dst, pre-funded by the flash)
+        //                        → maker.maker_dst_ata (SY)
+        // Ed25519 verify must precede this ix in the outer tx.
+        let cpi_accounts = FusionFill {
+            taker: ctx.accounts.caller.to_account_info(),
+            maker: ctx.accounts.maker.to_account_info(),
+            maker_receiver: ctx.accounts.maker_receiver.to_account_info(),
+            src_mint: ctx.accounts.src_mint.to_account_info(),
+            dst_mint: ctx.accounts.dst_mint.to_account_info(),
+            maker_src_ata: ctx.accounts.maker_src_ata.to_account_info(),
+            taker_src_ata: ctx.accounts.taker_src_ata.to_account_info(),
+            maker_dst_ata: Some(ctx.accounts.maker_dst_ata.to_account_info()),
+            // Solver's SY ATA (where the flash deposited the borrowed SY).
+            // fusion.fill debits this to deliver SY to the maker.
+            taker_dst_ata: Some(ctx.accounts.caller_sy_dst.to_account_info()),
+            protocol_dst_acc: ctx
+                .accounts
+                .protocol_dst_acc
+                .as_ref()
+                .map(|a| a.to_account_info()),
+            integrator_dst_acc: ctx
+                .accounts
+                .integrator_dst_acc
+                .as_ref()
+                .map(|a| a.to_account_info()),
+            order_state: ctx.accounts.order_state.to_account_info(),
+            delegate_authority: ctx.accounts.delegate_authority.to_account_info(),
+            src_token_program: ctx.accounts.src_token_program.to_account_info(),
+            dst_token_program: ctx.accounts.dst_token_program.to_account_info(),
+            system_program: ctx.accounts.system_program.to_account_info(),
+            associated_token_program: ctx.accounts.associated_token_program.to_account_info(),
+            instructions_sysvar: ctx.accounts.instructions_sysvar.to_account_info(),
+        };
+        fusion_cpi::fill(
+            CpiContext::new(ctx.accounts.fusion_program.to_account_info(), cpi_accounts),
+            payload.fusion_order,
+            payload.fusion_fill_amount,
+            None,
+        )?;
+
+        // Pro-forma: after fusion.fill the solver should hold ≥ pt_required
+        // PT in their PT ATA. Surplus (Dutch-auction overshoot etc.) stays
+        // with the solver as profit.
+        ctx.accounts.taker_src_ata.reload()?;
+        require!(
+            ctx.accounts.taker_src_ata.amount >= pt_required,
+            CallbackError::InsufficientPulledSrc
+        );
+
+        // --- Step 2: repay the flash by moving PT → market.pt_escrow ---
+        // src_mint == market.mint_pt by the AMM's accounting (token_pt_escrow
+        // is created with that mint at market init). We use src_mint here
+        // rather than re-passing mint_pt because fusion.fill already
+        // validated `taker_src_ata.mint == src_mint`.
+        transfer_checked(
+            CpiContext::new(
+                ctx.accounts.core_token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.taker_src_ata.to_account_info(),
+                    mint: ctx.accounts.src_mint.to_account_info(),
+                    to: ctx.accounts.token_pt_escrow.to_account_info(),
+                    authority: ctx.accounts.caller.to_account_info(),
+                },
+            ),
+            pt_required,
+            ctx.accounts.src_mint.decimals,
+        )?;
+
+        let _ = sy_received;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +329,90 @@ pub struct OnFlashPtReceived<'info> {
     pub instructions_sysvar: UncheckedAccount<'info>,
 }
 
+/// Account layout MUST match `core::flash_swap_sy`'s callback invocation:
+///   index 0..6 — fixed prefix injected by core (with caller_sy_dst in slot 1
+///                and token_pt_escrow in slot 2 — the borrow / repay legs
+///                swap places vs. the buy-side prefix).
+///   index 6..N — the `remaining_accounts` the solver passed to core.
+#[derive(Accounts)]
+pub struct OnFlashSyReceived<'info> {
+    // ---- Fixed prefix from core ----
+    /// CHECK: market account — readonly here.
+    pub market: UncheckedAccount<'info>,
+
+    /// Solver's SY ATA. Core just deposited `sy_received` SY here.
+    /// Fusion.fill will debit it to deliver SY to the maker.
+    #[account(mut)]
+    pub caller_sy_dst: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Market's PT escrow. Callback must top it up by `pt_required`.
+    #[account(mut)]
+    pub token_pt_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// SY mint — used by the dst_mint guardrail check.
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
+
+    /// Solver signs the outer tx; their signature is propagated here via CPI.
+    pub caller: Signer<'info>,
+
+    /// Token program for the PT-escrow repay leg.
+    pub core_token_program: Interface<'info, TokenInterface>,
+
+    // ---- fusion.fill passthrough (from solver's remaining_accounts) ----
+    pub fusion_program: Program<'info, ClearstoneFusion>,
+
+    /// CHECK: maker pubkey; validated inside fusion.fill against its OrderConfig.
+    pub maker: UncheckedAccount<'info>,
+
+    /// CHECK: maker_receiver (wallet receiving dst SY).
+    #[account(mut)]
+    pub maker_receiver: UncheckedAccount<'info>,
+
+    /// Maker's PT ATA — fusion.fill pulls PT from here.
+    #[account(mut)]
+    pub maker_src_ata: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Solver's PT ATA — fusion.fill credits PT here, and the repay leg
+    /// debits it.
+    #[account(mut)]
+    pub taker_src_ata: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// CHECK: maker's SY ATA (where SY lands after fusion.fill delivery).
+    #[account(mut)]
+    pub maker_dst_ata: UncheckedAccount<'info>,
+
+    /// PT mint (= market.mint_pt for this direction). Used for transfer_checked.
+    pub src_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// SY mint (= market.mint_sy). Validated against `mint_sy` by the
+    /// `UnsupportedDstMint` check.
+    pub dst_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    pub src_token_program: Interface<'info, TokenInterface>,
+    pub dst_token_program: Interface<'info, TokenInterface>,
+
+    /// CHECK: fusion delegate authority PDA.
+    pub delegate_authority: UncheckedAccount<'info>,
+
+    /// CHECK: fusion per-order state PDA.
+    #[account(mut)]
+    pub order_state: UncheckedAccount<'info>,
+
+    /// CHECK: fusion protocol fee recipient (optional).
+    #[account(mut)]
+    pub protocol_dst_acc: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: fusion integrator fee recipient (optional).
+    #[account(mut)]
+    pub integrator_dst_acc: Option<UncheckedAccount<'info>>,
+
+    pub system_program: Program<'info, System>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+
+    /// CHECK: instructions sysvar — fusion reads this to verify the Ed25519 verify ix.
+    pub instructions_sysvar: UncheckedAccount<'info>,
+}
+
 // ---------------------------------------------------------------------------
 // Payload
 // ---------------------------------------------------------------------------
@@ -243,6 +436,8 @@ pub enum CallbackError {
     MalformedPayload,
     #[msg("Reference callback only supports orders where src_mint == market.mint_sy")]
     UnsupportedSrcMint,
+    #[msg("Reference callback (sell-PT) only supports orders where dst_mint == market.mint_sy")]
+    UnsupportedDstMint,
     #[msg("fusion.fill pulled less src than sy_required — order underfills the flash")]
     InsufficientPulledSrc,
 }

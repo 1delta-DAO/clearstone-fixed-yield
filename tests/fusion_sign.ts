@@ -132,13 +132,33 @@ export function signFusionOrder(args: SignFusionOrderArgs): FusionOrderBundle {
   };
 }
 
-/** Minimal helper: build a "permissionless, no-auction, no-fee" OrderConfig. */
+/**
+ * Two shapes the fusion `ResolverPolicy` enum accepts (mirrors the IDL):
+ *   - `{ allowedList: Pubkey[] }`  empty list = permissionless,
+ *                                  non-empty = whitelist of solver pubkeys.
+ *   - `{ merkleRoot: number[] }`   32-byte root committing to a larger
+ *                                  allowlist (fusion verifies inclusion at
+ *                                  fill time via merkle_proof callback arg).
+ *
+ * The TS shape matches Anchor's IDL emit for tagged unions (camelCase
+ * variant key, raw value as the field). Pass to buildSimpleOrder /
+ * signFusionOrder as-is.
+ */
+export type ResolverPolicy =
+  | { allowedList: PublicKey[] }
+  | { merkleRoot: number[] /* 32 bytes */ };
+
+/** Minimal helper: build a "permissionless, no-auction, no-fee" OrderConfig.
+ *  Override `resolverPolicy` to gate the order to specific solvers (KYC
+ *  markets) or to a merkle-committed list for large allowlists. */
 export function buildSimpleOrder(params: {
   id: number;
   srcAmount: anchor.BN;
   minDstAmount: anchor.BN;
   estimatedDstAmount?: anchor.BN;
   expirationTime: number; // unix seconds as u32
+  /** Defaults to `{ allowedList: [] }` (permissionless). */
+  resolverPolicy?: ResolverPolicy;
 }): FusionOrderConfig {
   return {
     id: params.id,
@@ -158,7 +178,7 @@ export function buildSimpleOrder(params: {
       initialRateBump: 0,
       pointsAndTimeDeltas: [],
     },
-    resolverPolicy: { allowedList: [] },
+    resolverPolicy: params.resolverPolicy ?? { allowedList: [] },
   } as any;
 }
 
