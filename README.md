@@ -41,6 +41,10 @@ scripts/clearstone_pt_solver/ off-chain PT solver for fusion intents.
 
 ## Read order
 
+- **[FLOWS.md](FLOWS.md)** — end-to-end walk-through of the four
+  shippable flows: market init + AMM seed, plain buy/sell PT via the
+  router, and the same buy/sell routed as fusion intents (flash_swap_pt
+  / flash_swap_sy). Start here if you're integrating.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — system diagram + per-op
   data flows.
 - **[CURATOR_GUIDE.md](CURATOR_GUIDE.md)** — step-by-step for
