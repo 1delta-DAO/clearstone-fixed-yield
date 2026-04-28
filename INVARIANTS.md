@@ -642,6 +642,46 @@ no intermediate state is visible.
 
 ---
 
+### I-F5 — Flash size is bounded by AMM curve regime
+
+**Statement.** A single `flash_swap_pt` may borrow at most
+`FLASH_MAX_PT_BPS` of `market.financials.pt_balance` (currently 25 %).
+Borrows above that revert with `FlashSizeExceedsCap` before any state
+mutation.
+
+**Why.** `flash_swap_pt` quotes the AMM exactly once at flash-open and
+commits with that snapshot at step 7. Inside its near-linear regime the
+snapshot is a fair price; outside it (large `pt_out / pt_balance`) the
+quote diverges from the curve's true marginal price. Without the cap a
+solver could flash a large fraction of the pool, pair it with a tiny
+`min_dst_amount` on the fusion side, satisfy the maker, and pocket the
+spread between the snapshot quote and the curve-realised value at LP
+expense. The cap forces large notional through multiple flashes — each
+one re-snapshots the post-commit pool, so the AMM gets to re-price
+between segments.
+
+**Where enforced.**
+[programs/clearstone_core/src/instructions/market_two/flash_swap_pt.rs](programs/clearstone_core/src/instructions/market_two/flash_swap_pt.rs)
+`validate()` after the existing `InsufficientPtLiquidity` check; constant
+in [programs/clearstone_core/src/constants.rs](programs/clearstone_core/src/constants.rs).
+The `cap` calculation runs in `u128` to avoid overflow on large pools
+before truncation back into the comparison.
+
+**Tests.**
+[tests/clearstone-fusion-flash.ts](tests/clearstone-fusion-flash.ts):
+- "cap (pt_out > FLASH_MAX_PT_BPS of pool) reverts with FlashSizeExceedsCap"
+- "cap boundary (pt_out == FLASH_MAX_PT_BPS of pool) is accepted"
+
+The boundary test exercises the inclusive `<=` so off-by-one regressions
+trip immediately.
+
+**Residual risk.** A series of legitimate small flashes still moves the
+curve. The cap doesn't prevent atomic-multi-flash schemes if a future
+change relaxes I-F1 (nested flash). I-F1 + I-F5 are mutually reinforcing
+— neither alone suffices.
+
+---
+
 ## Roll-delegation invariants
 
 Scope: [periphery/clearstone_curator/src/roll_delegation.rs](periphery/clearstone_curator/src/roll_delegation.rs)

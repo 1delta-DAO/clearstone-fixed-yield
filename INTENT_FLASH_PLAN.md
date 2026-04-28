@@ -365,6 +365,15 @@ generic.
   decremented only at step 7 (the AMM commit); the flash window between step
   4 and step 6 temporarily has `escrow_pt.amount < pt_balance` — permitted
   iff `pt_balance - escrow_pt.amount == flash_pt_debt`.
+- **I-F5 (Flash size bounded by AMM curve regime).** `pt_out` is at most
+  `FLASH_MAX_PT_BPS` (25 %) of `market.financials.pt_balance`, enforced
+  in `validate()` after `InsufficientPtLiquidity`; over-cap calls revert
+  with `FlashSizeExceedsCap` before any state mutation. Keeps the
+  step-2 quote snapshot inside its near-linear regime so a solver can't
+  flash the entire pool, satisfy a tiny `min_dst` order, and pocket the
+  spread at LP expense. Larger notional must be split into multiple
+  flashes (each one re-quotes against the post-commit pool, guaranteed
+  by I-F1).
 
 ### Preserved — existing invariants untouched
 

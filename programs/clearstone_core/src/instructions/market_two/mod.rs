@@ -16,5 +16,8 @@ pub use sell_yt::*;
 pub mod flash_swap_pt;
 pub use flash_swap_pt::*;
 
+pub mod flash_swap_sy;
+pub use flash_swap_sy::*;
+
 pub mod admin;
 pub use admin::*;

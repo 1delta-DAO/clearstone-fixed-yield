@@ -86,4 +86,6 @@ pub enum ExponentCoreError {
     FlashRepayInsufficient,
     #[msg("Market lacks sufficient PT liquidity for the requested flash")]
     InsufficientPtLiquidity,
+    #[msg("Flash size exceeds FLASH_MAX_PT_BPS of pool PT — split into multiple flashes")]
+    FlashSizeExceedsCap,
 }

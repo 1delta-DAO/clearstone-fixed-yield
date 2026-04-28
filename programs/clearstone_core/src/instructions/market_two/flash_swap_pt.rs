@@ -17,6 +17,7 @@
 //     through the callback window — the callback cannot CPI the SY program.
 
 use crate::{
+    constants::FLASH_MAX_PT_BPS,
     error::ExponentCoreError,
     state::MarketTwo,
     util::sy_transfer_checked,
@@ -33,7 +34,6 @@ use anchor_lang::{
 };
 use anchor_spl::{
     token::Token,
-    token_2022,
     token_interface::{Mint, TokenAccount, TransferChecked},
 };
 use precise_number::Number;
@@ -76,19 +76,27 @@ pub struct FlashSwapPt<'info> {
         has_one = token_pt_escrow,
         has_one = token_fee_treasury_sy,
         has_one = mint_sy,
+        has_one = mint_pt,
     )]
     pub market: Account<'info, MarketTwo>,
 
-    /// PT destination for the flash borrow. Must be caller-controlled.
-    #[account(mut, token::authority = caller)]
+    /// PT destination for the flash borrow. Must be caller-controlled and
+    /// of the right mint — `token::mint = mint_pt` rejects a wrong-mint ATA
+    /// at the Anchor boundary instead of letting the SPL transfer catch it
+    /// later (defense in depth: makes the constraint the static source of
+    /// truth instead of relying on the runtime token-program check).
+    #[account(mut, token::authority = caller, token::mint = mint_pt)]
     pub caller_pt_dst: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Market-owned SY escrow; callback must top this up to close the flash.
     #[account(mut, token::mint = mint_sy)]
     pub token_sy_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    /// Market-owned PT escrow the flash is borrowed from.
-    #[account(mut)]
+    /// Market-owned PT escrow the flash is borrowed from. Mint pinned to
+    /// `mint_pt` (matches market.has_one) so a curator-supplied bogus
+    /// market with mismatched escrow.mint cannot route a transfer to the
+    /// caller's PT ATA.
+    #[account(mut, token::mint = mint_pt)]
     pub token_pt_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// SY fee destination.
@@ -97,8 +105,17 @@ pub struct FlashSwapPt<'info> {
 
     pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
 
+    /// PT mint — pinned via `market.has_one = mint_pt`. Used for the
+    /// Token-2022-aware `transfer_checked` on the PT-out leg below.
+    pub mint_pt: Box<InterfaceAccount<'info, Mint>>,
+
     /// CHECK: CPI target for the flash callback. Untrusted to the caller's
     /// own satisfaction — they sign the tx that selects this program.
+    /// Required to be a loaded program (`executable=true`); otherwise the
+    /// `invoke` below would fail with a less-clear runtime error. This is
+    /// informational defense — caller picked it, so this only short-circuits
+    /// obvious typos earlier in the flow.
+    #[account(executable)]
     pub callback_program: UncheckedAccount<'info>,
 
     /// CHECK: constrained by market.
@@ -111,9 +128,10 @@ pub struct FlashSwapPt<'info> {
 }
 
 impl<'i> FlashSwapPt<'i> {
-    fn transfer_pt_out_accounts(&self) -> token_2022::Transfer<'i> {
-        token_2022::Transfer {
+    fn transfer_pt_out_accounts(&self) -> TransferChecked<'i> {
+        TransferChecked {
             from: self.token_pt_escrow.to_account_info(),
+            mint: self.mint_pt.to_account_info(),
             to: self.caller_pt_dst.to_account_info(),
             authority: self.market.to_account_info(),
         }
@@ -145,6 +163,25 @@ impl<'i> FlashSwapPt<'i> {
         require!(
             self.market.financials.pt_balance >= pt_out,
             ExponentCoreError::InsufficientPtLiquidity
+        );
+
+        // AMM-side flash cap (I-F5): the snapshot quote computed below is only
+        // a fair price for `pt_out << pt_balance`. A solver who flashes a
+        // significant fraction of the pool, pairs it with a tiny `min_dst`
+        // fusion order, and walks away with the spread, drains LPs at the
+        // expense of an honest maker. Cap individual flashes at
+        // `FLASH_MAX_PT_BPS` of the pool's PT so the snapshot quote stays in
+        // its near-linear regime. Callers needing larger notional split into
+        // multiple flashes; each subsequent flash sees the post-commit pool
+        // and re-quotes against it. Compute as u128 to avoid u64 overflow on
+        // large pools.
+        let cap = (self.market.financials.pt_balance as u128)
+            .checked_mul(FLASH_MAX_PT_BPS as u128)
+            .and_then(|v| v.checked_div(10_000))
+            .ok_or(ExponentCoreError::MathOverflow)?;
+        require!(
+            (pt_out as u128) <= cap,
+            ExponentCoreError::FlashSizeExceedsCap
         );
 
         Ok(())
@@ -205,13 +242,18 @@ pub fn handler<'info>(
 
     let market_seeds = ctx.accounts.market.signer_seeds();
     let signer_seeds: &[&[&[u8]]] = &[&market_seeds];
-    let cpi_ctx = CpiContext::new(
-        ctx.accounts.token_program.to_account_info(),
-        ctx.accounts.transfer_pt_out_accounts(),
-    )
-    .with_signer(signer_seeds);
-    #[allow(deprecated)]
-    token_2022::transfer(cpi_ctx, pt_out)?;
+    // `transfer_checked` (Token-2022-aware) instead of the deprecated
+    // unchecked transfer. Other PT/SY transfer sites already use the
+    // checked variant (M-KYC-4); this site was missed in that pass.
+    sy_transfer_checked(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            ctx.accounts.transfer_pt_out_accounts(),
+        )
+        .with_signer(signer_seeds),
+        pt_out,
+        ctx.accounts.mint_pt.decimals,
+    )?;
 
     ctx.accounts.market.flash_pt_debt = pt_out;
 

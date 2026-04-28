@@ -135,7 +135,7 @@ becomes a curator-selected property of whichever SY adapter the vault is
 wired to. If the audit covers institutional deployments, also review the
 external governor + delta-mint repos separately.
 
-### Flash swap (I-F1 through I-F4)
+### Flash swap (I-F1 through I-F5)
 
 - `market.flash_pt_debt` is zero at rest and only written by `flash_swap_pt`
   (steps 4 and 8). Every other market-mutating handler gates on this field.
@@ -149,6 +149,11 @@ external governor + delta-mint repos separately.
   check. Callback programs are free to source SY from anywhere — the
   only requirement is that `token_sy_escrow.amount` grows by at least
   the quoted amount before the handler returns.
+- `pt_out` is bounded at `FLASH_MAX_PT_BPS` (25 %) of pool `pt_balance`
+  per I-F5 — large flashes revert with `FlashSizeExceedsCap` before any
+  state mutation. Keeps the snapshot quote inside its near-linear regime
+  so a solver can't pair a pool-draining flash with a tiny `min_dst`
+  fusion order and pocket the spread.
 
 **Auditor guidance.** The flash primitive is intentionally a temporary
 I-M1 violation. The guards in I-F1..I-F4 narrow the violation window to a

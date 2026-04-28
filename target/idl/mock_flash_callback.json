@@ -86,6 +86,104 @@
           "type": "bytes"
         }
       ]
+    },
+    {
+      "name": "on_flash_sy_received",
+      "docs": [
+        "Mirror of `on_flash_pt_received` for the sell-PT direction. Core's",
+        "`flash_swap_sy` has already given the solver `sy_received` SY; the",
+        "callback must deposit `pt_required` PT into `token_pt_escrow` before",
+        "returning. Mode byte semantics match the buy-side variant."
+      ],
+      "discriminator": [
+        74,
+        114,
+        47,
+        202,
+        95,
+        144,
+        119,
+        42
+      ],
+      "accounts": [
+        {
+          "name": "market"
+        },
+        {
+          "name": "caller_sy_dst",
+          "docs": [
+            "Solver's SY ATA where the flash-borrowed SY landed."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_pt_escrow",
+          "docs": [
+            "Market's PT escrow — the callback must deposit `pt_required` here."
+          ],
+          "writable": true
+        },
+        {
+          "name": "mint_sy"
+        },
+        {
+          "name": "solver",
+          "signer": true
+        },
+        {
+          "name": "core_token_program"
+        },
+        {
+          "name": "solver_pt_src",
+          "docs": [
+            "Solver's own PT ATA — pre-funded by the test harness to cover the repay."
+          ],
+          "writable": true
+        },
+        {
+          "name": "mint_pt",
+          "docs": [
+            "PT mint — needed for transfer_checked decimals."
+          ]
+        },
+        {
+          "name": "token_sy_escrow",
+          "writable": true
+        },
+        {
+          "name": "token_fee_treasury_sy",
+          "writable": true
+        },
+        {
+          "name": "address_lookup_table"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "self_program"
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        }
+      ],
+      "args": [
+        {
+          "name": "_sy_received",
+          "type": "u64"
+        },
+        {
+          "name": "pt_required",
+          "type": "u64"
+        },
+        {
+          "name": "data",
+          "type": "bytes"
+        }
+      ]
     }
   ],
   "errors": [

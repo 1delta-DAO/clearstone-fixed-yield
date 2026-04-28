@@ -243,6 +243,14 @@ Every other market-mutating handler (`trade_pt`, `buy_yt`, `sell_yt`,
 `flash_pt_debt == 0` — nested flash is blocked (I-F1). Cross-market
 flashes are permitted; each market has its own debt field.
 
+A single flash is also size-bounded: `pt_out ≤ FLASH_MAX_PT_BPS` (25 %)
+of the pool's `pt_balance`, enforced in `validate()` (I-F5). The cap
+keeps the step-2 quote snapshot inside the AMM curve's near-linear
+regime so a solver can't pair a pool-draining flash with a tiny
+`min_dst` fusion order and pocket the spread at LP expense. Larger
+notional must be split across multiple flashes; each subsequent flash
+re-quotes against the post-commit pool.
+
 Reference callback — fusion-fill delivery for PT orders —
 [clearstone_solver_callback](periphery/clearstone_solver_callback/src/lib.rs).
 Full spec and invariant proofs: [INTENT_FLASH_PLAN.md](INTENT_FLASH_PLAN.md).

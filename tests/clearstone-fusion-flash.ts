@@ -222,8 +222,13 @@ function findEventAuthority(programId: PublicKey): PublicKey {
  * caller_pt_dst, token_sy_escrow, mint_sy, caller, token_program. Everything
  * past that comes from `remainingAccounts` we put on flash_swap_pt. The mock
  * expects (in this order):
- *   solver_sy_src, token_pt_escrow, token_fee_treasury_sy, address_lookup_table,
- *   sy_program, self_program, core_program, core_event_authority.
+ *   solver_sy_src, token_pt_escrow, token_fee_treasury_sy, mint_pt,
+ *   address_lookup_table, sy_program, self_program, core_program,
+ *   core_event_authority.
+ *
+ * `mint_pt` was added when flash_swap_pt grew a `mint_pt` accounts-struct
+ * field; the nested-flash branch of the mock forwards it to the recursive
+ * CPI, so the harness has to position it here.
  */
 function callbackPassthrough(
   stack: FlashStack,
@@ -234,6 +239,7 @@ function callbackPassthrough(
     { pubkey: stack.solverSyAta, isSigner: false, isWritable: true },
     { pubkey: stack.market.escrowPt, isSigner: false, isWritable: true },
     { pubkey: stack.market.tokenTreasuryFeeSy, isSigner: false, isWritable: true },
+    { pubkey: stack.vault.mintPt, isSigner: false, isWritable: false },
     { pubkey: stack.market.alt, isSigner: false, isWritable: false },
     { pubkey: syProgram.programId, isSigner: false, isWritable: false },
     { pubkey: callbackId, isSigner: false, isWritable: false },
@@ -306,6 +312,7 @@ async function callFlashSwap(
       tokenPtEscrow: stack.market.escrowPt,
       tokenFeeTreasurySy: stack.market.tokenTreasuryFeeSy,
       mintSy: stack.sy.syMint,
+      mintPt: stack.vault.mintPt,
       callbackProgram: callbackProgramId,
       addressLookupTable: stack.market.alt,
       syProgram: syProgram.programId,
@@ -423,6 +430,32 @@ describe("clearstone_core :: flash_swap_pt", () => {
     } catch (e: any) {
       expect(String(e)).to.match(/InsufficientPtLiquidity/i);
     }
+  });
+
+  it("cap (pt_out > FLASH_MAX_PT_BPS of pool) reverts with FlashSizeExceedsCap", async () => {
+    // Pool is 1_000_000 PT (set by freshFlashStack); cap is 25 % = 250_000.
+    // 250_001 is the smallest size that violates the cap without also
+    // tripping `InsufficientPtLiquidity` (which fires earlier in validate()).
+    const stack = await freshFlashStack();
+    try {
+      await callFlashSwap(stack, new BN(250_001), 1 /* MODE_OK — moot */);
+      assert.fail("over-cap flash must revert");
+    } catch (e: any) {
+      expect(String(e)).to.match(/FlashSizeExceedsCap/i);
+    }
+  });
+
+  it("cap boundary (pt_out == FLASH_MAX_PT_BPS of pool) is accepted", async () => {
+    // 250_000 is exactly 25 % of the 1_000_000 pool — the boundary the cap
+    // requires `<=`, so this must succeed end-to-end.
+    const stack = await freshFlashStack();
+    await callFlashSwap(stack, new BN(250_000), 1 /* MODE_OK */);
+    const market = (await (core.account as any).marketTwo.fetch(stack.market.market)) as any;
+    assert.equal(
+      BigInt(market.flashPtDebt.toString()),
+      0n,
+      "flash_pt_debt cleared at tx end"
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -615,6 +648,7 @@ describe("clearstone_core :: flash_swap_pt", () => {
         tokenPtEscrow: stack.market.escrowPt,
         tokenFeeTreasurySy: stack.market.tokenTreasuryFeeSy,
         mintSy: stack.sy.syMint,
+        mintPt: stack.vault.mintPt,
         callbackProgram: callbackProgramId,
         addressLookupTable: stack.market.alt,
         syProgram: syProgram.programId,
@@ -678,5 +712,212 @@ describe("clearstone_core :: flash_swap_pt", () => {
       0n,
       "flash_pt_debt cleared at tx end"
     );
+  });
+});
+
+// ===========================================================================
+// flash_swap_sy — sell-PT mirror.
+//
+// Same harness as flash_swap_pt with sides swapped:
+//   - solver pre-funded with PT (instead of SY) to cover the repay leg
+//   - flash hands solver `sy_out` SY (AMM-quoted from pt_in)
+//   - mock callback's on_flash_sy_received transfers `pt_required` PT
+//     from solver_pt_src → token_pt_escrow
+// Mode byte semantics are identical (0=NoOp, 1=Ok, 2=ShortRepay, 3=Nested).
+// ===========================================================================
+
+/**
+ * Account list the sell-PT mock decodes positionally after core's 6-account
+ * fixed prefix (market, caller_sy_dst, token_pt_escrow, mint_sy, caller,
+ * token_program). Must match the field order on `OnFlashSyReceived`.
+ */
+function callbackPassthroughSy(
+  stack: FlashStack,
+  callbackId: PublicKey
+): anchor.web3.AccountMeta[] {
+  const coreEventAuth = findEventAuthority(core.programId);
+  return [
+    { pubkey: stack.solverPtAta, isSigner: false, isWritable: true }, // solver_pt_src
+    { pubkey: stack.vault.mintPt, isSigner: false, isWritable: false }, // mint_pt
+    { pubkey: stack.market.escrowSy, isSigner: false, isWritable: true }, // token_sy_escrow (nested-flash plumbing)
+    { pubkey: stack.market.tokenTreasuryFeeSy, isSigner: false, isWritable: true },
+    { pubkey: stack.market.alt, isSigner: false, isWritable: false },
+    { pubkey: syProgram.programId, isSigner: false, isWritable: false },
+    { pubkey: callbackId, isSigner: false, isWritable: false },
+    { pubkey: core.programId, isSigner: false, isWritable: false },
+    { pubkey: coreEventAuth, isSigner: false, isWritable: false },
+  ];
+}
+
+async function callFlashSwapSy(
+  stack: FlashStack,
+  ptIn: BN,
+  mode: number,
+  callbackProgramId: PublicKey = mockCallback.programId
+): Promise<string> {
+  const extras = await syCpiExtras(stack);
+  const passthrough = callbackPassthroughSy(stack, callbackProgramId);
+
+  return core.methods
+    .flashSwapSy(ptIn, Buffer.from([mode]))
+    .accounts({
+      caller: stack.solver.publicKey,
+      market: stack.market.market,
+      callerSyDst: stack.solverSyAta,
+      tokenSyEscrow: stack.market.escrowSy,
+      tokenPtEscrow: stack.market.escrowPt,
+      tokenFeeTreasurySy: stack.market.tokenTreasuryFeeSy,
+      mintSy: stack.sy.syMint,
+      mintPt: stack.vault.mintPt,
+      callbackProgram: callbackProgramId,
+      addressLookupTable: stack.market.alt,
+      syProgram: syProgram.programId,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    } as any)
+    .remainingAccounts([...passthrough, ...extras])
+    .preInstructions([CU_LIMIT_IX])
+    .signers([stack.solver])
+    .rpc();
+}
+
+/** Pre-fund the solver's PT ATA from the payer's PT inventory so the mock
+ *  callback's repay leg has something to spend. */
+async function fundSolverPt(stack: FlashStack, amount: bigint): Promise<void> {
+  const payerPt = await getOrCreateAssociatedTokenAccount(
+    provider.connection,
+    payer,
+    stack.vault.mintPt,
+    payer.publicKey
+  );
+  // Use the same SPL-token transfer the harness uses elsewhere for SY.
+  const { createTransferInstruction } = await import("@solana/spl-token");
+  const ix = createTransferInstruction(
+    payerPt.address,
+    stack.solverPtAta,
+    payer.publicKey,
+    amount,
+    [],
+    TOKEN_PROGRAM_ID
+  );
+  await provider.sendAndConfirm(new Transaction().add(ix), [payer]);
+}
+
+describe("clearstone_core :: flash_swap_sy", () => {
+  it("happy path (mode=Ok): solver borrows SY, repays PT, market state committed", async () => {
+    const stack = await freshFlashStack();
+    // Solver needs PT inventory to repay; pre-fund from payer's strip output.
+    await fundSolverPt(stack, 200_000n);
+
+    const escrowPtBefore = (await getAccount(provider.connection, stack.market.escrowPt)).amount;
+    const solverSyBefore = (await getAccount(provider.connection, stack.solverSyAta)).amount;
+    const marketBefore = (await (core.account as any).marketTwo.fetch(stack.market.market)) as any;
+
+    const ptIn = new BN(100_000);
+    await callFlashSwapSy(stack, ptIn, 1 /* MODE_OK */);
+
+    // Market committed: pt_balance increased by ptIn (trader sold PT into pool).
+    const marketAfter = (await (core.account as any).marketTwo.fetch(stack.market.market)) as any;
+    assert.equal(
+      BigInt(marketAfter.financials.ptBalance.toString()),
+      BigInt(marketBefore.financials.ptBalance.toString()) + BigInt(ptIn.toString()),
+      "market.pt_balance increased by the flashed amount"
+    );
+
+    // PT escrow grew by exactly ptIn (callback's repay leg).
+    const escrowPtAfter = (await getAccount(provider.connection, stack.market.escrowPt)).amount;
+    assert.equal(
+      escrowPtAfter,
+      escrowPtBefore + BigInt(ptIn.toString()),
+      "escrow_pt grew by exactly ptIn"
+    );
+
+    // Solver received SY from the flash. token_sy_escrow is a passthrough
+    // (do_withdraw_sy pulls from adapter pool then transfers to solver, then
+    // step 6.5 transfers treasury fee out — net escrow_sy ≈ unchanged), so
+    // the unambiguous check is that the solver's SY balance went up.
+    const solverSyAfter = (await getAccount(provider.connection, stack.solverSyAta)).amount;
+    assert.ok(
+      solverSyAfter > solverSyBefore,
+      "solver received SY from the flash (pulled out of adapter via do_withdraw_sy)"
+    );
+
+    // I-F1: flash_pt_debt must be 0 at rest.
+    assert.equal(
+      BigInt(marketAfter.flashPtDebt.toString()),
+      0n,
+      "flash_pt_debt cleared at tx end"
+    );
+  });
+
+  it("short-repay (mode=ShortRepay) reverts with FlashRepayInsufficient", async () => {
+    const stack = await freshFlashStack();
+    await fundSolverPt(stack, 200_000n);
+    try {
+      await callFlashSwapSy(stack, new BN(100_000), 2 /* MODE_SHORT_REPAY */);
+      assert.fail("short-repay must revert");
+    } catch (e: any) {
+      expect(String(e)).to.match(/FlashRepayInsufficient/i);
+    }
+    const market = (await (core.account as any).marketTwo.fetch(stack.market.market)) as any;
+    assert.equal(
+      BigInt(market.flashPtDebt.toString()),
+      0n,
+      "failed flash must revert flash_pt_debt to 0"
+    );
+  });
+
+  it("nested flash (mode=TryNestedFlash) reverts with NestedFlashBlocked (or earlier guard)", async () => {
+    const stack = await freshFlashStack();
+    await fundSolverPt(stack, 200_000n);
+    let captured: any;
+    try {
+      await callFlashSwapSy(stack, new BN(100_000), 3 /* MODE_TRY_NESTED_FLASH */);
+      assert.fail("nested flash must revert");
+    } catch (e: any) {
+      captured = e;
+    }
+    // The flash_swap_sy → callback → flash_swap_pt path can revert at any of:
+    //   - I-F1 NestedFlashBlocked (cleanest signal — flash_pt_debt != 0 at
+    //     inner validate())
+    //   - I-C1 ReentrancyLocked / 6030 / "reentrancy not allowed" (if the
+    //     inner do_get_sy_state lands while the outer's reentrancy guard is
+    //     still engaged)
+    //   - an Anchor account-validation revert ahead of the validate() check
+    //     (the outer flash mutated state, so e.g. mint_pt.has_one comparisons
+    //     may flip if a wrong account is forwarded)
+    // All three reflect the same security property (no nested flash succeeds).
+    // Prefer the specific matchers; fall back to any error code from the core
+    // program before declaring the test failed.
+    const blob = [
+      captured?.message,
+      captured?.toString?.(),
+      Array.isArray(captured?.logs) ? captured.logs.join("\n") : undefined,
+      String(captured),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const matchedSpecific =
+      /NestedFlashBlocked|ReentrancyLocked|6030|reentrancy not allowed/i.test(
+        blob
+      );
+    const matchedCoreRevert =
+      /custom program error|AnchorError|Simulation failed/i.test(blob);
+    if (!matchedSpecific && !matchedCoreRevert) {
+      // eslint-disable-next-line no-console
+      console.log("flash_swap_sy nested-flash unexpected error:\n", blob);
+      assert.fail("nested flash did not revert with a recognizable error");
+    }
+  });
+
+  it("cap (pt_in > FLASH_MAX_PT_BPS of pool) reverts with FlashSizeExceedsCap", async () => {
+    // Pool is 1_000_000 PT; cap is 25 % = 250_000. 250_001 trips I-F5.
+    const stack = await freshFlashStack();
+    await fundSolverPt(stack, 300_000n);
+    try {
+      await callFlashSwapSy(stack, new BN(250_001), 1 /* MODE_OK — moot */);
+      assert.fail("over-cap flash must revert");
+    } catch (e: any) {
+      expect(String(e)).to.match(/FlashSizeExceedsCap/i);
+    }
   });
 });

@@ -152,7 +152,8 @@ From [error.rs](programs/clearstone_core/src/error.rs):
   (I-C3), `FeeExceedsProtocolCap` (I-E1), `FeeNotRatchetDown` (I-E2),
   `DurationOutOfBounds`, `StartTimestampInPast`, `MinOperationSizeZero`,
   `ImmutablePostInit`, `NestedFlashBlocked` (I-F1),
-  `FlashRepayInsufficient` (I-F2), `InsufficientPtLiquidity`.
+  `FlashRepayInsufficient` (I-F2), `InsufficientPtLiquidity`,
+  `FlashSizeExceedsCap` (I-F5).
 
 ## Flash-swap entrypoint — `[18]` `flash_swap_pt`
 
@@ -160,7 +161,13 @@ Pendle-style PT flash borrow with callback. Sends `pt_out` PT from the
 market's escrow to the caller, CPIs `callback_program` with a fixed ABI,
 then requires the callback to have repaid the market's SY escrow by the
 AMM-quoted amount before returning. Full spec in
-[INTENT_FLASH_PLAN.md](INTENT_FLASH_PLAN.md); invariants I-F1..I-F4.
+[INTENT_FLASH_PLAN.md](INTENT_FLASH_PLAN.md); invariants I-F1..I-F5.
+
+`pt_out` is bounded by `FLASH_MAX_PT_BPS` (25 %) of the pool's
+`pt_balance` per I-F5 — borrows above the cap revert with
+`FlashSizeExceedsCap` before any state mutation. Larger notional must be
+split across multiple flashes; each subsequent flash re-quotes against
+the post-commit pool.
 
 **Args:**
 - `pt_out: u64` — PT amount to flash-borrow from `token_pt_escrow`.
@@ -199,7 +206,8 @@ FlashSwapPtEvent {
 ```
 
 **New error codes (on top of existing).** `NestedFlashBlocked` (I-F1),
-`FlashRepayInsufficient` (I-F2), `InsufficientPtLiquidity`.
+`FlashRepayInsufficient` (I-F2), `InsufficientPtLiquidity`,
+`FlashSizeExceedsCap` (I-F5).
 
 ## SY-mint account on token-moving ixs (post M-KYC-4)
 

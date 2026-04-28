@@ -595,7 +595,11 @@ export type ClearstoneCore = {
         {
           "name": "callerPtDst",
           "docs": [
-            "PT destination for the flash borrow. Must be caller-controlled."
+            "PT destination for the flash borrow. Must be caller-controlled and",
+            "of the right mint — `token::mint = mint_pt` rejects a wrong-mint ATA",
+            "at the Anchor boundary instead of letting the SPL transfer catch it",
+            "later (defense in depth: makes the constraint the static source of",
+            "truth instead of relying on the runtime token-program check)."
           ],
           "writable": true
         },
@@ -609,7 +613,10 @@ export type ClearstoneCore = {
         {
           "name": "tokenPtEscrow",
           "docs": [
-            "Market-owned PT escrow the flash is borrowed from."
+            "Market-owned PT escrow the flash is borrowed from. Mint pinned to",
+            "`mint_pt` (matches market.has_one) so a curator-supplied bogus",
+            "market with mismatched escrow.mint cannot route a transfer to the",
+            "caller's PT ATA."
           ],
           "writable": true
         },
@@ -624,9 +631,20 @@ export type ClearstoneCore = {
           "name": "mintSy"
         },
         {
+          "name": "mintPt",
+          "docs": [
+            "PT mint — pinned via `market.has_one = mint_pt`. Used for the",
+            "Token-2022-aware `transfer_checked` on the PT-out leg below."
+          ]
+        },
+        {
           "name": "callbackProgram",
           "docs": [
-            "own satisfaction — they sign the tx that selects this program."
+            "own satisfaction — they sign the tx that selects this program.",
+            "Required to be a loaded program (`executable=true`); otherwise the",
+            "`invoke` below would fail with a less-clear runtime error. This is",
+            "informational defense — caller picked it, so this only short-circuits",
+            "obvious typos earlier in the flow."
           ]
         },
         {
@@ -658,6 +676,121 @@ export type ClearstoneCore = {
       "returns": {
         "defined": {
           "name": "flashSwapPtEvent"
+        }
+      }
+    },
+    {
+      "name": "flashSwapSy",
+      "docs": [
+        "Sell-PT mirror of `flash_swap_pt`: flash-borrow the AMM-quoted SY for",
+        "a `pt_in` deposit, callback delivers SY to the maker via fusion and",
+        "returns `pt_in` PT to the market's escrow before the ix returns.",
+        "Discriminator follows the existing market_two block (18 = buy / 22 = sell).",
+        "See INTENT_FLASH_PLAN.md §5 (sell-PT branch)."
+      ],
+      "discriminator": [
+        22
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Marked `mut` for the same reason as `flash_swap_pt::FlashSwapPt::caller`:",
+            "callbacks may re-pass `caller` as a writable slot in nested fusion CPIs;",
+            "without `mut` here Solana would reject the tx with \"Cross-program",
+            "invocation with unauthorized signer or writable account\"."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "callerSyDst",
+          "docs": [
+            "SY destination for the flash borrow. Must be caller-controlled and",
+            "of the right mint — same defense-in-depth pattern as flash_swap_pt's",
+            "`caller_pt_dst`."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenSyEscrow",
+          "docs": [
+            "Market-owned SY escrow the flash is borrowed from. Mint pinned to",
+            "`mint_sy`."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenPtEscrow",
+          "docs": [
+            "Market-owned PT escrow; callback must top this up to close the flash.",
+            "Mint pinned to `mint_pt` (matches market.has_one) so a curator-supplied",
+            "bogus market with mismatched escrow.mint cannot route a transfer to",
+            "the caller's PT ATA."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenFeeTreasurySy",
+          "docs": [
+            "SY fee destination — same fee leg as flash_swap_pt (treasury_fee paid",
+            "in SY out of escrow_sy at commit time)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "mintSy"
+        },
+        {
+          "name": "mintPt",
+          "docs": [
+            "PT mint — pinned via `market.has_one = mint_pt`. Used for nothing on",
+            "the SY-borrow side directly, but its presence constrains",
+            "`token_pt_escrow.mint` and gives callbacks a typed handle to the same",
+            "Mint struct without re-deserialising."
+          ]
+        },
+        {
+          "name": "callbackProgram",
+          "docs": [
+            "own satisfaction — they sign the tx that selects this program.",
+            "`executable=true` short-circuits an obvious typo (a non-program",
+            "pubkey) before `invoke` produces a less-clear runtime error."
+          ]
+        },
+        {
+          "name": "addressLookupTable"
+        },
+        {
+          "name": "syProgram"
+        },
+        {
+          "name": "tokenProgram"
+        },
+        {
+          "name": "eventAuthority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "ptIn",
+          "type": "u64"
+        },
+        {
+          "name": "callbackData",
+          "type": "bytes"
+        }
+      ],
+      "returns": {
+        "defined": {
+          "name": "flashSwapSyEvent"
         }
       }
     },
@@ -1980,6 +2113,19 @@ export type ClearstoneCore = {
       ]
     },
     {
+      "name": "flashSwapSyEvent",
+      "discriminator": [
+        140,
+        114,
+        195,
+        27,
+        0,
+        226,
+        97,
+        30
+      ]
+    },
+    {
       "name": "initializeYieldPositionEvent",
       "discriminator": [
         114,
@@ -2320,6 +2466,11 @@ export type ClearstoneCore = {
       "code": 6041,
       "name": "insufficientPtLiquidity",
       "msg": "Market lacks sufficient PT liquidity for the requested flash"
+    },
+    {
+      "code": 6042,
+      "name": "flashSizeExceedsCap",
+      "msg": "Flash size exceeds FLASH_MAX_PT_BPS of pool PT — split into multiple flashes"
     }
   ],
   "types": [
@@ -3174,6 +3325,50 @@ export type ClearstoneCore = {
           },
           {
             "name": "syIn",
+            "type": "u64"
+          },
+          {
+            "name": "syFee",
+            "type": "u64"
+          },
+          {
+            "name": "syExchangeRate",
+            "type": {
+              "defined": {
+                "name": "number"
+              }
+            }
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "flashSwapSyEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "caller",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "callbackProgram",
+            "type": "pubkey"
+          },
+          {
+            "name": "ptIn",
+            "type": "u64"
+          },
+          {
+            "name": "syOut",
             "type": "u64"
           },
           {

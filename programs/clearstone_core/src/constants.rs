@@ -33,3 +33,20 @@ pub const VIRTUAL_SY: u64 = 1_000_000;
 /// in user-held LP but participates in every proportional calculation. With
 /// VP = VS = 1_000_000, this is exactly 1_000_000 (integer sqrt).
 pub const VIRTUAL_LP_FLOOR: u64 = 1_000_000;
+
+/// Maximum fraction of `market.financials.pt_balance` a single `flash_swap_pt`
+/// may borrow, in basis points. 2500 = 25 % of pool PT per flash.
+///
+/// **Why this exists:** the AMM quote inside `flash_swap_pt` is computed once
+/// against the pool reserves at flash-open. A solver who flashes the entire
+/// pool can pair it with a tiny `min_dst_amount` on the fusion side, satisfy
+/// the maker, and pocket the residual SY/PT spread at LP expense. Capping
+/// `pt_out / pt_balance` at a small fraction keeps a single flash from
+/// moving the curve so far that the snapshot quote becomes exploitable;
+/// callers needing more notional must split across multiple flashes (which
+/// each repay-and-resnap before the next opens, by I-F1).
+///
+/// 25 % is the same fraction Aave's V3 picks for its `MAX_LIQUIDATABLE_BPS`
+/// — close enough to the AMM curve's "still roughly linear" regime that
+/// `quote_trade_pt`'s snapshot remains a fair-ish price within rounding.
+pub const FLASH_MAX_PT_BPS: u16 = 2500;

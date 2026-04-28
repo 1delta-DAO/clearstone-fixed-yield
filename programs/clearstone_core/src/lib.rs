@@ -201,6 +201,20 @@ pub mod clearstone_core {
         instructions::market_two::flash_swap_pt::handler(ctx, pt_out, callback_data)
     }
 
+    /// Sell-PT mirror of `flash_swap_pt`: flash-borrow the AMM-quoted SY for
+    /// a `pt_in` deposit, callback delivers SY to the maker via fusion and
+    /// returns `pt_in` PT to the market's escrow before the ix returns.
+    /// Discriminator follows the existing market_two block (18 = buy / 22 = sell).
+    /// See INTENT_FLASH_PLAN.md §5 (sell-PT branch).
+    #[instruction(discriminator = [22])]
+    pub fn flash_swap_sy<'info>(
+        ctx: Context<'_, '_, '_, 'info, FlashSwapSy<'info>>,
+        pt_in: u64,
+        callback_data: Vec<u8>,
+    ) -> Result<FlashSwapSyEvent> {
+        instructions::market_two::flash_swap_sy::handler(ctx, pt_in, callback_data)
+    }
+
     /// Sell YT for SY
     #[instruction(discriminator = [1])]
     pub fn sell_yt<'i>(

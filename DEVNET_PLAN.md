@@ -398,20 +398,29 @@ program with `enableMetadata: true` flipped on `setupVault`:
   with docker available. Cannot be done in the current environment
   (docker daemon absent). Run on a workstation with docker before
   audit kickoff.
-- [ ] **Kamino canonical-stack handles** — `kamino_sy_adapter` is
-  deployed (devnet `29tisXppY…`) and the real-klend CPI shape is
-  fixed (per [`FOLLOWUP_KAMINO_REAL_KLEND.md`](FOLLOWUP_KAMINO_REAL_KLEND.md))
-  but the live USDC reserve `D4qXufDqB…` is gated by a stale Pyth
-  oracle (`E4pitSrZ…`) that klend's `RefreshReserve` rejects with
-  `PriceNotValid (6044)`. Two paths to resolve:
-  - (preferred) Reconfigure the reserve with a klend-mock-friendly
-    oracle for devnet, OR push fresh prices via `update_price_feeds_v2`
-    immediately before each `mint_sy`.
-  - (fallback) Document that integrators bring their own klend
-    reserve + oracle pair when standing up a Kamino stack.
-  Either way, once unblocked: adapt `scripts/setup-devnet-usdc-stack.ts`
-  to build a `canonicalStack.kamino` block alongside the existing
-  `generic_exchange_rate_sy` one. Persist results in `devnet.json`.
+- [x] **Kamino canonical-stack handles — RESOLVED 2026-04-28.**
+  `kamino_sy_adapter` is deployed (devnet `29tisXppY…`) and the
+  real-klend CPI shape is fixed (per
+  [`FOLLOWUP_KAMINO_REAL_KLEND.md`](FOLLOWUP_KAMINO_REAL_KLEND.md)).
+  The previously-gated reserve `D4qXufDqB…` was retired in favour of a
+  live, oracle-fresh reserve under `external.solstice.klendReserveActive`:
+
+  - reserve `AYhwFLgzxWwqznhxv6Bg1NVnNeoDNu9SBGLzM1W3hSfb` (status=0)
+  - underlying mint `8iBux2LRja1PhVZph8Rw4Hi45pgkaufNEiaZma5nTD5g` (Solstice USDC)
+  - collateral mint `74Wcd7VSUjK4wABMF15Kc4fYqiPDNj4NmE9MMSUR3AJv` (kUSDC)
+  - Pyth oracle `EN2FsFZFdpiFAWpKDZqeJ2PY8EyE7xzz9Ew8ZQVhtHCJ`
+
+  `mint_sy` now succeeds end-to-end through klend's `RefreshReserve` — the
+  price-validity gate passes without an `update_price_feeds_v2` precondition.
+  The canonical Kamino stack persisted in `deployments/devnet.json`
+  (`kaminoStack.{baseMint,klendReserve,klendPyth,klendCollateralMint,
+  syMetadata,syMint,curatorVault}`) is the integrator-facing handle set.
+
+  Side note: `clearstone-finance/packages/programs/configs/devnet/addresses.json`
+  still lists `oracles.usdcPythV2 = HSi8jh6q…`, which is system-program-
+  owned and never populated. That field should be deleted or annotated as
+  obsolete so future readers don't pick it up over the canonical
+  `external.solstice.klendReservePyth` here.
 - [ ] **Cron-driven monitoring** — landed: see
   `.github/workflows/devnet-health.yml` (daily 13:00 UTC) and
   `devnet-e2e-refresh.yml` (Mondays 09:00 UTC). The e2e-refresh job

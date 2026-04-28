@@ -92,6 +92,104 @@ export type MockFlashCallback = {
           "type": "bytes"
         }
       ]
+    },
+    {
+      "name": "onFlashSyReceived",
+      "docs": [
+        "Mirror of `on_flash_pt_received` for the sell-PT direction. Core's",
+        "`flash_swap_sy` has already given the solver `sy_received` SY; the",
+        "callback must deposit `pt_required` PT into `token_pt_escrow` before",
+        "returning. Mode byte semantics match the buy-side variant."
+      ],
+      "discriminator": [
+        74,
+        114,
+        47,
+        202,
+        95,
+        144,
+        119,
+        42
+      ],
+      "accounts": [
+        {
+          "name": "market"
+        },
+        {
+          "name": "callerSyDst",
+          "docs": [
+            "Solver's SY ATA where the flash-borrowed SY landed."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenPtEscrow",
+          "docs": [
+            "Market's PT escrow — the callback must deposit `pt_required` here."
+          ],
+          "writable": true
+        },
+        {
+          "name": "mintSy"
+        },
+        {
+          "name": "solver",
+          "signer": true
+        },
+        {
+          "name": "coreTokenProgram"
+        },
+        {
+          "name": "solverPtSrc",
+          "docs": [
+            "Solver's own PT ATA — pre-funded by the test harness to cover the repay."
+          ],
+          "writable": true
+        },
+        {
+          "name": "mintPt",
+          "docs": [
+            "PT mint — needed for transfer_checked decimals."
+          ]
+        },
+        {
+          "name": "tokenSyEscrow",
+          "writable": true
+        },
+        {
+          "name": "tokenFeeTreasurySy",
+          "writable": true
+        },
+        {
+          "name": "addressLookupTable"
+        },
+        {
+          "name": "syProgram"
+        },
+        {
+          "name": "selfProgram"
+        },
+        {
+          "name": "coreProgram"
+        },
+        {
+          "name": "coreEventAuthority"
+        }
+      ],
+      "args": [
+        {
+          "name": "syReceived",
+          "type": "u64"
+        },
+        {
+          "name": "ptRequired",
+          "type": "u64"
+        },
+        {
+          "name": "data",
+          "type": "bytes"
+        }
+      ]
     }
   ],
   "errors": [
