@@ -144,6 +144,155 @@
           "type": "bytes"
         }
       ]
+    },
+    {
+      "name": "on_flash_sy_received",
+      "docs": [
+        "Sell-PT mirror: invoked by `clearstone_core.flash_swap_sy` after it has",
+        "sent `sy_received` SY to the solver's SY ATA. Handler must ensure",
+        "`token_pt_escrow.amount` grows by at least `pt_required` before",
+        "returning — core enforces this via I-F2 on the PT side.",
+        "",
+        "`data` is the same `CallbackPayload` shape as the buy-side; the",
+        "fusion order this time has `src_mint = mint_pt`, `dst_mint = mint_sy`."
+      ],
+      "discriminator": [
+        74,
+        114,
+        47,
+        202,
+        95,
+        144,
+        119,
+        42
+      ],
+      "accounts": [
+        {
+          "name": "market"
+        },
+        {
+          "name": "caller_sy_dst",
+          "docs": [
+            "Solver's SY ATA. Core just deposited `sy_received` SY here.",
+            "Fusion.fill will debit it to deliver SY to the maker."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_pt_escrow",
+          "docs": [
+            "Market's PT escrow. Callback must top it up by `pt_required`."
+          ],
+          "writable": true
+        },
+        {
+          "name": "mint_sy",
+          "docs": [
+            "SY mint — used by the dst_mint guardrail check."
+          ]
+        },
+        {
+          "name": "caller",
+          "docs": [
+            "Solver signs the outer tx; their signature is propagated here via CPI."
+          ],
+          "signer": true
+        },
+        {
+          "name": "core_token_program",
+          "docs": [
+            "Token program for the PT-escrow repay leg."
+          ]
+        },
+        {
+          "name": "fusion_program"
+        },
+        {
+          "name": "maker"
+        },
+        {
+          "name": "maker_receiver",
+          "writable": true
+        },
+        {
+          "name": "maker_src_ata",
+          "docs": [
+            "Maker's PT ATA — fusion.fill pulls PT from here."
+          ],
+          "writable": true
+        },
+        {
+          "name": "taker_src_ata",
+          "docs": [
+            "Solver's PT ATA — fusion.fill credits PT here, and the repay leg",
+            "debits it."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maker_dst_ata",
+          "writable": true
+        },
+        {
+          "name": "src_mint",
+          "docs": [
+            "PT mint (= market.mint_pt for this direction). Used for transfer_checked."
+          ]
+        },
+        {
+          "name": "dst_mint",
+          "docs": [
+            "SY mint (= market.mint_sy). Validated against `mint_sy` by the",
+            "`UnsupportedDstMint` check."
+          ]
+        },
+        {
+          "name": "src_token_program"
+        },
+        {
+          "name": "dst_token_program"
+        },
+        {
+          "name": "delegate_authority"
+        },
+        {
+          "name": "order_state",
+          "writable": true
+        },
+        {
+          "name": "protocol_dst_acc",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "integrator_dst_acc",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "system_program"
+        },
+        {
+          "name": "associated_token_program"
+        },
+        {
+          "name": "instructions_sysvar"
+        }
+      ],
+      "args": [
+        {
+          "name": "sy_received",
+          "type": "u64"
+        },
+        {
+          "name": "pt_required",
+          "type": "u64"
+        },
+        {
+          "name": "data",
+          "type": "bytes"
+        }
+      ]
     }
   ],
   "errors": [
@@ -159,6 +308,11 @@
     },
     {
       "code": 6002,
+      "name": "UnsupportedDstMint",
+      "msg": "Reference callback (sell-PT) only supports orders where dst_mint == market.mint_sy"
+    },
+    {
+      "code": 6003,
       "name": "InsufficientPulledSrc",
       "msg": "fusion.fill pulled less src than sy_required — order underfills the flash"
     }

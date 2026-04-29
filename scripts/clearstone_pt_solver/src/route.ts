@@ -18,6 +18,12 @@
 
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
+import {
+  getAccount,
+  getAssociatedTokenAddressSync,
+  TOKEN_PROGRAM_ID,
+  TokenAccountNotFoundError,
+} from "@solana/spl-token";
 
 import type { SolverClients } from "./clients.js";
 import type { FusionOrderConfig } from "./fusion.js";
@@ -51,6 +57,44 @@ export type FillPlan =
       ptAmount: BN;
       /** Fusion fill amount (usually equals the order's src_amount). */
       fusionFillAmount: BN;
+    }
+  | {
+      // YT delivery from solver inventory (Shape A in YT_DELIVERY_PLAN.md).
+      // Solver pre-stripped some SY into PT + YT and now holds YT in their
+      // ATA. fusion.fill alone is enough — pulls src from maker, transfers
+      // YT from solver inventory → maker. No core ix is added; the
+      // inventory path skips the core-routing leg. Cheapest path on CU
+      // (~150k for fusion.fill alone).
+      //
+      // The solver bot can keep YT inventory topped up via
+      // `yt_inventory.ts` to land on this path consistently.
+      kind: "ytFromInventory";
+      vault: PublicKey;
+      /** SY pulled from maker by fusion.fill. Equals order.src_amount. */
+      srcAmount: BN;
+      /** YT delivered to maker. Equals order.min_dst_amount. */
+      ytAmount: BN;
+      /** Solver's YT ATA balance at plan time, for diagnostics. */
+      inventoryBalance: BN;
+    }
+  | {
+      // YT delivery via just-in-time `core.buy_yt(sy_in=0, yt_out)` —
+      // Shape A++ in YT_DELIVERY_PLAN.md. Capital-free for the solver:
+      // buy_yt's internal strip+trade_pt cascade balances to zero net SY
+      // when sy_in=0, so the solver doesn't need YT inventory OR SY
+      // inventory. The maker's SY (pulled by fusion.fill) is the
+      // solver's profit margin.
+      //
+      // Tx: [Ed25519, core.buy_yt(0, ytAmount), fusion.fill].
+      // CU cost: ~600k buy_yt + ~150k fusion.fill = ~750k. Within the
+      // 1.4M cap with headroom. Falls back to this when YT inventory is
+      // insufficient.
+      kind: "ytJustInTime";
+      vault: PublicKey;
+      /** SY pulled from maker by fusion.fill. */
+      srcAmount: BN;
+      /** YT to mint via buy_yt and deliver to maker. */
+      ytAmount: BN;
     };
 
 export async function tryRouteOrder(
@@ -67,10 +111,53 @@ export async function tryRouteOrder(
   const dstMint = new PublicKey(order.dstMint);
   const meta = await classifyMint(clients, dstMint);
   if (!meta) return null; // not a clearstone PT/YT — solver ignores
-  if (meta.kind === "yt") return null; // YT routing via buy_yt is a v2 follow-up
 
   const srcAmount = new BN(config.srcAmount.toString());
   const minDstAmount = new BN(config.minDstAmount.toString());
+
+  // YT routing — Shape A from YT_DELIVERY_PLAN.md.
+  //
+  // We can only fill from solver inventory: there's no AMM-side YT
+  // borrow (PT side has flash_swap_pt; YT does not). v2 will introduce
+  // flash_swap_yt that wraps the strip+trade_pt cascade so the solver
+  // doesn't need YT pre-funded. For now, check the YT ATA's balance
+  // and only commit if we can deliver from inventory.
+  if (meta.kind === "yt") {
+    const ytAta = getAssociatedTokenAddressSync(
+      meta.mint,
+      clients.solver.publicKey,
+      false,
+      TOKEN_PROGRAM_ID
+    );
+    let balance = new BN(0);
+    try {
+      const acct = await getAccount(clients.connection, ytAta);
+      balance = new BN(acct.amount.toString());
+    } catch (e) {
+      if (!(e instanceof TokenAccountNotFoundError)) throw e;
+      // No ATA yet — inventory is implicitly zero. Caller bot should
+      // run yt_inventory.ts to mint some before retrying this order.
+    }
+    if (balance.gte(minDstAmount)) {
+      // Inventory fast path — fusion.fill alone, ~150k CU.
+      return {
+        kind: "ytFromInventory",
+        vault: meta.vault,
+        srcAmount,
+        ytAmount: minDstAmount,
+        inventoryBalance: balance,
+      };
+    }
+    // No (or insufficient) YT inventory. Fall through to the JIT path:
+    // buy_yt(0, yt_out) mints exactly the YT we need with zero upfront
+    // SY, then fusion.fill delivers it. ~750k CU.
+    return {
+      kind: "ytJustInTime",
+      vault: meta.vault,
+      srcAmount,
+      ytAmount: minDstAmount,
+    };
+  }
 
   // Read the first active market for this vault. A full solver would pick
   // across seed_ids and maturity; we take seed_id = 1 for the demo.

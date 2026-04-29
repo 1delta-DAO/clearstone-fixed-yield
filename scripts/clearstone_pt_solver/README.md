@@ -48,6 +48,65 @@ To fall back to the inventory path (for debugging / A/B), set `DISABLE_FLASH=1`.
 The solver then picks between `trade_pt` and `strip` based on AMM depth, using
 its own just-in-time src inventory.
 
+## YT delivery — Shape A (inventory) and Shape A++ (just-in-time)
+
+When a fusion order's `dst_mint` is a YT mint, the router picks one of
+two paths based on solver state:
+
+1. **`ytFromInventory`** — solver has YT pre-funded. Tx is just
+   `[Ed25519, fusion.fill]`. ~150k CU.
+2. **`ytJustInTime`** — solver has no (or insufficient) YT. Tx is
+   `[Ed25519, core.buy_yt(sy_in=0, yt_out=N), fusion.fill]`. ~750k CU.
+
+The `ytJustInTime` path is the realization of v2 from
+[YT_DELIVERY_PLAN.md](../../YT_DELIVERY_PLAN.md). Crucial discovery:
+**`buy_yt(sy_in=0, yt_out=N)` is already a capital-free flash** —
+its internal cascade
+(`do_withdraw_sy → do_borrow_sy → do_cpi_strip → do_cpi_trade_pt →
+ do_repay_sy → do_deposit_sy`) balances to a net SY change of `-sy_in`
+for the trader. With `sy_in=0` the solver mints exactly `N` YT in one
+ix without any upfront SY. fusion.fill then delivers it. No new
+core ix needed. The originally-scoped Steps 1–6 in YT_DELIVERY_PLAN.md
+collapse to a single bot tweak.
+
+The router auto-falls-back: if the solver's YT ATA balance ≥ order's
+`min_dst_amount`, it picks `ytFromInventory`; otherwise `ytJustInTime`.
+A solver running `yt_inventory.ts` keeps the cheap fast path
+hot; one without inventory still serves the order, just at higher CU.
+
+### Optional: pre-funding YT inventory for the cheap path
+
+`src/yt_inventory.ts` exposes `topUpYtInventory({ vault,
+targetYtBalance })` that strips solver SY into PT + YT until the YT ATA
+hits the target. The PT byproduct is useful inventory for `tradePt`
+fills on the same vault — no waste.
+
+Run as a one-shot:
+
+```bash
+tsx src/yt_inventory.ts \
+  --rpc https://api.devnet.solana.com \
+  --keypair ~/.config/solana/id.json \
+  --vault <vault-pk> \
+  --target 1000000
+```
+
+…or as a polling loop:
+
+```bash
+tsx src/yt_inventory.ts --interval-ms 60000 ...   # check every minute
+```
+
+### Sell-YT direction — still v2 work
+
+When a maker has YT and wants SY (i.e. `src_mint = mint_yt`,
+`dst_mint = mint_sy`), neither shortcut works because `sell_yt` needs
+the trader's YT before the AMM math runs and the maker's YT only
+arrives via fusion.fill mid-tx. A new core ix `flash_sell_yt` (mirror
+of `flash_swap_sy` but with a YT-borrow leg) is needed — see
+[YT_DELIVERY_PLAN.md §D2](../../YT_DELIVERY_PLAN.md). Until it ships,
+sell-YT orders fall back to inventory-only.
+
 ## What it IS
 
 - A TS skeleton showing how to decode a fusion `OrderConfig`, recognize

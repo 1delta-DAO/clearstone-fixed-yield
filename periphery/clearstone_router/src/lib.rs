@@ -678,6 +678,50 @@ pub mod clearstone_router {
         )?;
         Ok(())
     }
+
+    /// Pure passthrough to `core.flash_sell_yt` (sell-YT direction). Same
+    /// account-shape rule as the buy/sell-PT wrappers — every named slot
+    /// forwards verbatim, remaining_accounts pass through untouched.
+    /// See YT_DELIVERY_PLAN.md §D2 for the on-chain semantics.
+    pub fn wrapper_flash_sell_yt<'info>(
+        ctx: Context<'_, '_, '_, 'info, WrapperFlashSellYt<'info>>,
+        yt_in: u64,
+        sy_advance: u64,
+        callback_data: Vec<u8>,
+    ) -> Result<()> {
+        let accounts = clearstone_core::cpi::accounts::FlashSellYt {
+            caller: ctx.accounts.caller.to_account_info(),
+            market: ctx.accounts.market.to_account_info(),
+            caller_sy_dst: ctx.accounts.caller_sy_dst.to_account_info(),
+            caller_pt_dst: ctx.accounts.caller_pt_dst.to_account_info(),
+            caller_yt_dst: ctx.accounts.caller_yt_dst.to_account_info(),
+            token_sy_escrow: ctx.accounts.token_sy_escrow.to_account_info(),
+            token_pt_escrow: ctx.accounts.token_pt_escrow.to_account_info(),
+            token_fee_treasury_sy: ctx.accounts.token_fee_treasury_sy.to_account_info(),
+            mint_sy: ctx.accounts.mint_sy.to_account_info(),
+            mint_pt: ctx.accounts.mint_pt.to_account_info(),
+            callback_program: ctx.accounts.callback_program.to_account_info(),
+            address_lookup_table: ctx.accounts.address_lookup_table.to_account_info(),
+            sy_program: ctx.accounts.sy_program.to_account_info(),
+            token_program: ctx.accounts.token_program.to_account_info(),
+            vault: ctx.accounts.vault.to_account_info(),
+            authority_vault: ctx.accounts.authority_vault.to_account_info(),
+            token_sy_escrow_vault: ctx.accounts.token_sy_escrow_vault.to_account_info(),
+            mint_yt: ctx.accounts.mint_yt.to_account_info(),
+            address_lookup_table_vault: ctx.accounts.address_lookup_table_vault.to_account_info(),
+            yield_position_vault: ctx.accounts.yield_position_vault.to_account_info(),
+            event_authority: ctx.accounts.core_event_authority.to_account_info(),
+            program: ctx.accounts.core_program.to_account_info(),
+        };
+        clearstone_core::cpi::flash_sell_yt(
+            CpiContext::new(ctx.accounts.core_program.to_account_info(), accounts)
+                .with_remaining_accounts(ctx.remaining_accounts.to_vec()),
+            yt_in,
+            sy_advance,
+            callback_data,
+        )?;
+        Ok(())
+    }
 }
 
 // ---------- CPI helpers ----------
@@ -1362,6 +1406,88 @@ pub struct WrapperFlashSwapSy<'info> {
     pub sy_program: UncheckedAccount<'info>,
 
     pub token_program: Program<'info, Token>,
+
+    pub core_program: Program<'info, ClearstoneCore>,
+
+    /// CHECK: core_program's event_authority PDA.
+    pub core_event_authority: UncheckedAccount<'info>,
+}
+
+/// Mirror of `core::FlashSellYt`'s account layout. Adds the vault-side
+/// fields (vault PDA + authority + escrow + mint_yt + ALT + yield
+/// position) that the inline merge cascade traverses; otherwise mirrors
+/// `WrapperFlashSwapSy`.
+#[derive(Accounts)]
+pub struct WrapperFlashSellYt<'info> {
+    #[account(mut)]
+    pub caller: Signer<'info>,
+
+    /// CHECK: forwarded verbatim to core.flash_sell_yt; core re-validates.
+    #[account(mut)]
+    pub market: AccountInfo<'info>,
+
+    #[account(mut, token::authority = caller, token::mint = mint_sy)]
+    pub caller_sy_dst: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut, token::authority = caller, token::mint = mint_pt)]
+    pub caller_pt_dst: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Solver's YT ATA — not constrained on mint here because mint_yt
+    /// is an UncheckedAccount on core's struct (cpi-only). Core's inline
+    /// merge cascade enforces the linkage.
+    #[account(mut, token::authority = caller)]
+    pub caller_yt_dst: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut, token::mint = mint_sy)]
+    pub token_sy_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut, token::mint = mint_pt)]
+    pub token_pt_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut, token::mint = mint_sy)]
+    pub token_fee_treasury_sy: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut)]
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
+
+    #[account(mut)]
+    pub mint_pt: Box<InterfaceAccount<'info, Mint>>,
+
+    /// CHECK: caller-picked CPI target; core re-validates `executable`.
+    #[account(executable)]
+    pub callback_program: UncheckedAccount<'info>,
+
+    /// CHECK: validated by core via market.has_one.
+    pub address_lookup_table: UncheckedAccount<'info>,
+
+    /// CHECK: validated by core via market.has_one.
+    pub sy_program: UncheckedAccount<'info>,
+
+    pub token_program: Program<'info, Token>,
+
+    // ---- Vault-side accounts (the inline merge cascade traverses these) ----
+    /// CHECK: validated by core's merge CPI (= market.vault).
+    #[account(mut)]
+    pub vault: UncheckedAccount<'info>,
+
+    /// CHECK: validated by core's merge CPI.
+    #[account(mut)]
+    pub authority_vault: UncheckedAccount<'info>,
+
+    /// CHECK: validated by core's merge CPI.
+    #[account(mut)]
+    pub token_sy_escrow_vault: UncheckedAccount<'info>,
+
+    /// CHECK: validated by core's merge CPI.
+    #[account(mut)]
+    pub mint_yt: UncheckedAccount<'info>,
+
+    /// CHECK: vault's ALT — passed through to the merge cascade.
+    pub address_lookup_table_vault: UncheckedAccount<'info>,
+
+    /// CHECK: validated by core's merge CPI.
+    #[account(mut)]
+    pub yield_position_vault: UncheckedAccount<'info>,
 
     pub core_program: Program<'info, ClearstoneCore>,
 

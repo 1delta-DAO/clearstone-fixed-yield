@@ -88,4 +88,8 @@ pub enum ExponentCoreError {
     InsufficientPtLiquidity,
     #[msg("Flash size exceeds FLASH_MAX_PT_BPS of pool PT — split into multiple flashes")]
     FlashSizeExceedsCap,
+    #[msg("flash_sell_yt callback didn't deliver enough YT into the solver's YT ATA")]
+    FlashYtCallbackUnderdelivered,
+    #[msg("flash_sell_yt internal cascade produced less SY than the advance — solver loss")]
+    FlashSellYtNetUnderwater,
 }

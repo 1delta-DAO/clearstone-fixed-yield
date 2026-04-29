@@ -332,6 +332,128 @@ export type ClearstoneRouter = {
       ]
     },
     {
+      "name": "wrapperFlashSellYt",
+      "docs": [
+        "Pure passthrough to `core.flash_sell_yt` (sell-YT direction). Same",
+        "account-shape rule as the buy/sell-PT wrappers — every named slot",
+        "forwards verbatim, remaining_accounts pass through untouched.",
+        "See YT_DELIVERY_PLAN.md §D2 for the on-chain semantics."
+      ],
+      "discriminator": [
+        156,
+        157,
+        126,
+        42,
+        111,
+        15,
+        167,
+        11
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "callerSyDst",
+          "writable": true
+        },
+        {
+          "name": "callerPtDst",
+          "writable": true
+        },
+        {
+          "name": "callerYtDst",
+          "docs": [
+            "Solver's YT ATA — not constrained on mint here because mint_yt",
+            "is an UncheckedAccount on core's struct (cpi-only). Core's inline",
+            "merge cascade enforces the linkage."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenSyEscrow",
+          "writable": true
+        },
+        {
+          "name": "tokenPtEscrow",
+          "writable": true
+        },
+        {
+          "name": "tokenFeeTreasurySy",
+          "writable": true
+        },
+        {
+          "name": "mintSy",
+          "writable": true
+        },
+        {
+          "name": "mintPt",
+          "writable": true
+        },
+        {
+          "name": "callbackProgram"
+        },
+        {
+          "name": "addressLookupTable"
+        },
+        {
+          "name": "syProgram"
+        },
+        {
+          "name": "tokenProgram"
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "authorityVault",
+          "writable": true
+        },
+        {
+          "name": "tokenSyEscrowVault",
+          "writable": true
+        },
+        {
+          "name": "mintYt",
+          "writable": true
+        },
+        {
+          "name": "addressLookupTableVault"
+        },
+        {
+          "name": "yieldPositionVault",
+          "writable": true
+        },
+        {
+          "name": "coreProgram"
+        },
+        {
+          "name": "coreEventAuthority"
+        }
+      ],
+      "args": [
+        {
+          "name": "ytIn",
+          "type": "u64"
+        },
+        {
+          "name": "syAdvance",
+          "type": "u64"
+        },
+        {
+          "name": "callbackData",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
       "name": "wrapperFlashSwapPt",
       "docs": [
         "Pure passthrough to `core.flash_swap_pt`. Solvers/keepers that already",

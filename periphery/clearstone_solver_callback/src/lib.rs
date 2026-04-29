@@ -244,6 +244,94 @@ pub mod clearstone_solver_callback {
         let _ = sy_received;
         Ok(())
     }
+
+    /// Sell-YT mirror: invoked by `clearstone_core.flash_sell_yt` after
+    /// it has pre-advanced `sy_received` SY to the solver's SY ATA.
+    /// Handler must populate `caller_yt_dst` with at least `yt_required`
+    /// YT before returning (core verifies via I-F-YT2). Production flow:
+    /// run fusion.fill which pulls maker.YT → solver and delivers
+    /// solver.SY → maker. Core's inline sell_yt cascade (after the
+    /// callback returns) burns the YT and repays the SY advance.
+    ///
+    /// `data` borsh-decodes to `CallbackPayload` — same shape as the
+    /// other directions; the order's `src_mint = mint_yt`,
+    /// `dst_mint = mint_sy` for this branch.
+    pub fn on_flash_sell_yt_received(
+        ctx: Context<OnFlashSellYtReceived>,
+        sy_received: u64,
+        yt_required: u64,
+        data: Vec<u8>,
+    ) -> Result<()> {
+        let payload = CallbackPayload::try_from_slice(&data)
+            .map_err(|_| error!(CallbackError::MalformedPayload))?;
+
+        // Reference scope: dst == mint_sy (solver delivers SY to maker).
+        // src == mint_yt is implied by the order; fusion.fill will
+        // reject if maker.src_ata.mint != src_mint.
+        require!(
+            ctx.accounts.dst_mint.key() == ctx.accounts.mint_sy.key(),
+            CallbackError::UnsupportedDstMint
+        );
+
+        // --- Step 1: fusion.fill — atomic pull-and-deliver ---
+        // Maker.YT → solver (taker_src_ata).
+        // Solver.SY (caller_sy_dst, pre-loaded by the flash) → maker (maker_dst_ata).
+        let cpi_accounts = FusionFill {
+            taker: ctx.accounts.caller.to_account_info(),
+            maker: ctx.accounts.maker.to_account_info(),
+            maker_receiver: ctx.accounts.maker_receiver.to_account_info(),
+            src_mint: ctx.accounts.src_mint.to_account_info(),
+            dst_mint: ctx.accounts.dst_mint.to_account_info(),
+            maker_src_ata: ctx.accounts.maker_src_ata.to_account_info(),
+            taker_src_ata: ctx.accounts.taker_src_ata.to_account_info(),
+            maker_dst_ata: Some(ctx.accounts.maker_dst_ata.to_account_info()),
+            // taker_dst_ata is the solver's SY ATA — flash_sell_yt's
+            // caller_sy_dst — pre-funded by the SY advance at step 3 of
+            // the outer ix.
+            taker_dst_ata: Some(ctx.accounts.caller_sy_dst.to_account_info()),
+            protocol_dst_acc: ctx
+                .accounts
+                .protocol_dst_acc
+                .as_ref()
+                .map(|a| a.to_account_info()),
+            integrator_dst_acc: ctx
+                .accounts
+                .integrator_dst_acc
+                .as_ref()
+                .map(|a| a.to_account_info()),
+            order_state: ctx.accounts.order_state.to_account_info(),
+            delegate_authority: ctx.accounts.delegate_authority.to_account_info(),
+            src_token_program: ctx.accounts.src_token_program.to_account_info(),
+            dst_token_program: ctx.accounts.dst_token_program.to_account_info(),
+            system_program: ctx.accounts.system_program.to_account_info(),
+            associated_token_program: ctx.accounts.associated_token_program.to_account_info(),
+            instructions_sysvar: ctx.accounts.instructions_sysvar.to_account_info(),
+        };
+        fusion_cpi::fill(
+            CpiContext::new(ctx.accounts.fusion_program.to_account_info(), cpi_accounts),
+            payload.fusion_order,
+            payload.fusion_fill_amount,
+            None,
+        )?;
+
+        // After fusion.fill, taker_src_ata holds the maker's pulled YT.
+        // Pro-forma: confirm we received ≥ yt_required (core's outer
+        // delta check enforces the same invariant on caller_yt_dst, but
+        // checking here surfaces problems before the flash unwinds).
+        ctx.accounts.taker_src_ata.reload()?;
+        require!(
+            ctx.accounts.taker_src_ata.amount >= yt_required,
+            CallbackError::InsufficientPulledSrc
+        );
+
+        // No explicit repay leg — core's `flash_sell_yt` handler will
+        // do the inline sell_yt cascade (borrow_pt / merge / trade_pt /
+        // repay_pt) and the SY-deposit-back to the adapter pool after
+        // this callback returns. The callback's job is solely to land
+        // YT into caller_yt_dst.
+        let _ = sy_received;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +474,104 @@ pub struct OnFlashSyReceived<'info> {
 
     /// SY mint (= market.mint_sy). Validated against `mint_sy` by the
     /// `UnsupportedDstMint` check.
+    pub dst_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    pub src_token_program: Interface<'info, TokenInterface>,
+    pub dst_token_program: Interface<'info, TokenInterface>,
+
+    /// CHECK: fusion delegate authority PDA.
+    pub delegate_authority: UncheckedAccount<'info>,
+
+    /// CHECK: fusion per-order state PDA.
+    #[account(mut)]
+    pub order_state: UncheckedAccount<'info>,
+
+    /// CHECK: fusion protocol fee recipient (optional).
+    #[account(mut)]
+    pub protocol_dst_acc: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: fusion integrator fee recipient (optional).
+    #[account(mut)]
+    pub integrator_dst_acc: Option<UncheckedAccount<'info>>,
+
+    pub system_program: Program<'info, System>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+
+    /// CHECK: instructions sysvar — fusion reads this to verify the Ed25519 verify ix.
+    pub instructions_sysvar: UncheckedAccount<'info>,
+}
+
+/// Account layout for the sell-YT callback. Mirrors core's
+/// `flash_sell_yt` invocation prefix: market, caller_sy_dst (=
+/// taker_dst_ata for fusion), caller_yt_dst (= taker_src_ata for
+/// fusion), mint_sy, caller, core_token_program. Note this struct does
+/// NOT carry a separate `taker_src_ata` — both legs of fusion.fill
+/// reuse the named slots from the core prefix.
+#[derive(Accounts)]
+pub struct OnFlashSellYtReceived<'info> {
+    // ---- Fixed prefix from core ----
+    /// CHECK: market account — readonly here.
+    pub market: UncheckedAccount<'info>,
+
+    /// Solver's SY ATA. Core pre-advanced `sy_received` SY here at
+    /// step 3 of `flash_sell_yt`. fusion.fill drains it to deliver SY
+    /// to the maker (taker_dst_ata role).
+    #[account(mut)]
+    pub caller_sy_dst: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Solver's YT ATA. fusion.fill credits it from maker.YT_ata
+    /// (taker_src_ata role). Core's outer ix verifies this account's
+    /// balance grew by ≥ `yt_required` after the callback returns.
+    #[account(mut)]
+    pub caller_yt_dst: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// SY mint — used by the dst_mint guardrail check.
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
+
+    /// Solver signs the outer tx; their signature is propagated here via CPI.
+    pub caller: Signer<'info>,
+
+    /// Token program — required by Anchor's account decode for
+    /// `caller_sy_dst` / `caller_yt_dst` even though the callback
+    /// itself doesn't issue token CPIs (core's inline cascade owns the
+    /// merge / trade_pt / repay legs).
+    pub core_token_program: Interface<'info, TokenInterface>,
+
+    // ---- fusion.fill passthrough (from solver's remaining_accounts) ----
+    pub fusion_program: Program<'info, ClearstoneFusion>,
+
+    /// CHECK: maker pubkey; validated inside fusion.fill against its OrderConfig.
+    pub maker: UncheckedAccount<'info>,
+
+    /// CHECK: maker_receiver (wallet receiving dst SY).
+    #[account(mut)]
+    pub maker_receiver: UncheckedAccount<'info>,
+
+    /// Maker's YT ATA — fusion.fill pulls YT from here.
+    #[account(mut)]
+    pub maker_src_ata: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Solver's YT ATA mirror for fusion.fill's `taker_src_ata` role.
+    /// MUST point to the same pubkey as `caller_yt_dst` above —
+    /// duplicating the slot here would split the writability flag and
+    /// trip the runtime, so we let fusion.fill see the same AccountInfo
+    /// twice (once via this prefix-named slot, once via the
+    /// remaining_accounts forwarding).
+    /// CHECK: equality with caller_yt_dst is enforced by core's outer
+    /// ix's writability check on caller_yt_dst's delta.
+    #[account(mut)]
+    pub taker_src_ata: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// CHECK: maker's SY ATA (where SY lands after fusion.fill delivery).
+    #[account(mut)]
+    pub maker_dst_ata: UncheckedAccount<'info>,
+
+    /// YT mint (= market.mint_yt for this direction). Used internally
+    /// by fusion.fill for transfer_checked decimals.
+    pub src_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// SY mint (= market.mint_sy). Validated against `mint_sy` by
+    /// `UnsupportedDstMint`.
     pub dst_mint: Box<InterfaceAccount<'info, Mint>>,
 
     pub src_token_program: Interface<'info, TokenInterface>,

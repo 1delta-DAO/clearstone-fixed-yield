@@ -289,12 +289,17 @@ pub fn handler<'info>(
     //   4. caller                 (signer pass-through)
     //   5. token_program          (readonly)
     //   6..N. remaining_accounts from the outer tx — callback-defined
+    // Mirror flash_swap_pt's CPI shape: `caller` is forwarded as
+    // writable+signer, not readonly, because callbacks routinely re-pass
+    // `caller` as the `taker` slot in a fusion.fill (or other) CPI where
+    // the inner ix declares it writable. A readonly forward here would
+    // make any such inner CPI revert with "writable privilege escalated".
     let mut callback_accounts = vec![
         AccountMeta::new_readonly(ctx.accounts.market.key(), false),
         AccountMeta::new(ctx.accounts.caller_sy_dst.key(), false),
         AccountMeta::new(ctx.accounts.token_pt_escrow.key(), false),
         AccountMeta::new_readonly(ctx.accounts.mint_sy.key(), false),
-        AccountMeta::new_readonly(ctx.accounts.caller.key(), true),
+        AccountMeta::new(ctx.accounts.caller.key(), true),
         AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
     ];
     let mut callback_infos = vec![

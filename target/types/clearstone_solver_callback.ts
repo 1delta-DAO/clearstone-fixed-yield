@@ -150,6 +150,155 @@ export type ClearstoneSolverCallback = {
           "type": "bytes"
         }
       ]
+    },
+    {
+      "name": "onFlashSyReceived",
+      "docs": [
+        "Sell-PT mirror: invoked by `clearstone_core.flash_swap_sy` after it has",
+        "sent `sy_received` SY to the solver's SY ATA. Handler must ensure",
+        "`token_pt_escrow.amount` grows by at least `pt_required` before",
+        "returning — core enforces this via I-F2 on the PT side.",
+        "",
+        "`data` is the same `CallbackPayload` shape as the buy-side; the",
+        "fusion order this time has `src_mint = mint_pt`, `dst_mint = mint_sy`."
+      ],
+      "discriminator": [
+        74,
+        114,
+        47,
+        202,
+        95,
+        144,
+        119,
+        42
+      ],
+      "accounts": [
+        {
+          "name": "market"
+        },
+        {
+          "name": "callerSyDst",
+          "docs": [
+            "Solver's SY ATA. Core just deposited `sy_received` SY here.",
+            "Fusion.fill will debit it to deliver SY to the maker."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenPtEscrow",
+          "docs": [
+            "Market's PT escrow. Callback must top it up by `pt_required`."
+          ],
+          "writable": true
+        },
+        {
+          "name": "mintSy",
+          "docs": [
+            "SY mint — used by the dst_mint guardrail check."
+          ]
+        },
+        {
+          "name": "caller",
+          "docs": [
+            "Solver signs the outer tx; their signature is propagated here via CPI."
+          ],
+          "signer": true
+        },
+        {
+          "name": "coreTokenProgram",
+          "docs": [
+            "Token program for the PT-escrow repay leg."
+          ]
+        },
+        {
+          "name": "fusionProgram"
+        },
+        {
+          "name": "maker"
+        },
+        {
+          "name": "makerReceiver",
+          "writable": true
+        },
+        {
+          "name": "makerSrcAta",
+          "docs": [
+            "Maker's PT ATA — fusion.fill pulls PT from here."
+          ],
+          "writable": true
+        },
+        {
+          "name": "takerSrcAta",
+          "docs": [
+            "Solver's PT ATA — fusion.fill credits PT here, and the repay leg",
+            "debits it."
+          ],
+          "writable": true
+        },
+        {
+          "name": "makerDstAta",
+          "writable": true
+        },
+        {
+          "name": "srcMint",
+          "docs": [
+            "PT mint (= market.mint_pt for this direction). Used for transfer_checked."
+          ]
+        },
+        {
+          "name": "dstMint",
+          "docs": [
+            "SY mint (= market.mint_sy). Validated against `mint_sy` by the",
+            "`UnsupportedDstMint` check."
+          ]
+        },
+        {
+          "name": "srcTokenProgram"
+        },
+        {
+          "name": "dstTokenProgram"
+        },
+        {
+          "name": "delegateAuthority"
+        },
+        {
+          "name": "orderState",
+          "writable": true
+        },
+        {
+          "name": "protocolDstAcc",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "integratorDstAcc",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "systemProgram"
+        },
+        {
+          "name": "associatedTokenProgram"
+        },
+        {
+          "name": "instructionsSysvar"
+        }
+      ],
+      "args": [
+        {
+          "name": "syReceived",
+          "type": "u64"
+        },
+        {
+          "name": "ptRequired",
+          "type": "u64"
+        },
+        {
+          "name": "data",
+          "type": "bytes"
+        }
+      ]
     }
   ],
   "errors": [
@@ -165,6 +314,11 @@ export type ClearstoneSolverCallback = {
     },
     {
       "code": 6002,
+      "name": "unsupportedDstMint",
+      "msg": "Reference callback (sell-PT) only supports orders where dst_mint == market.mint_sy"
+    },
+    {
+      "code": 6003,
       "name": "insufficientPulledSrc",
       "msg": "fusion.fill pulled less src than sy_required — order underfills the flash"
     }

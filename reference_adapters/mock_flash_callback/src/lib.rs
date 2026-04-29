@@ -136,6 +136,34 @@ pub mod mock_flash_callback {
             _ => err!(MockError::UnknownMode),
         }
     }
+
+    /// Mirror of `on_flash_sy_received` for the sell-YT direction. Core's
+    /// `flash_sell_yt` has already advanced `sy_received` SY to the solver
+    /// (in `caller_sy_dst`) and now expects the callback to populate
+    /// `caller_yt_dst` with at least `yt_required` YT. In production the
+    /// callback runs fusion.fill (maker.YT → solver, solver.SY → maker);
+    /// the mock simply transfers from a pre-funded `solver_yt_src` ATA.
+    pub fn on_flash_sell_yt_received(
+        ctx: Context<OnFlashSellYtReceived>,
+        _sy_received: u64,
+        yt_required: u64,
+        data: Vec<u8>,
+    ) -> Result<()> {
+        require!(!data.is_empty(), MockError::MissingModeByte);
+        let mode = data[0];
+
+        match mode {
+            MODE_NOOP => Ok(()),
+            MODE_OK => deliver_yt(&ctx, yt_required),
+            MODE_SHORT_REPAY => {
+                let short = yt_required
+                    .checked_sub(1)
+                    .ok_or(MockError::MissingModeByte)?;
+                deliver_yt(&ctx, short)
+            }
+            _ => err!(MockError::UnknownMode),
+        }
+    }
 }
 
 fn repay<'info>(ctx: &Context<OnFlashPtReceived<'info>>, amount: u64) -> Result<()> {
@@ -270,6 +298,61 @@ pub struct OnFlashSyReceived<'info> {
     pub core_program: UncheckedAccount<'info>,
     /// CHECK: core event_authority.
     pub core_event_authority: UncheckedAccount<'info>,
+}
+
+fn deliver_yt<'info>(
+    ctx: &Context<OnFlashSellYtReceived<'info>>,
+    amount: u64,
+) -> Result<()> {
+    if amount == 0 {
+        return Ok(());
+    }
+    transfer_checked(
+        CpiContext::new(
+            ctx.accounts.core_token_program.to_account_info(),
+            TransferChecked {
+                from: ctx.accounts.solver_yt_src.to_account_info(),
+                mint: ctx.accounts.mint_yt.to_account_info(),
+                to: ctx.accounts.caller_yt_dst.to_account_info(),
+                authority: ctx.accounts.solver.to_account_info(),
+            },
+        ),
+        amount,
+        ctx.accounts.mint_yt.decimals,
+    )
+}
+
+#[derive(Accounts)]
+pub struct OnFlashSellYtReceived<'info> {
+    // -- Fixed 6-account prefix core injects (mirrors flash_sell_yt's
+    //    callback ix layout) --
+    /// CHECK: market account, readonly here.
+    pub market: UncheckedAccount<'info>,
+
+    /// Solver's SY ATA — pre-loaded with `sy_received` SY. In production
+    /// the callback drains it via fusion.fill; the mock leaves it alone.
+    #[account(mut)]
+    pub caller_sy_dst: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Solver's YT ATA — must be topped up by ≥ `yt_required` before
+    /// returning. The mock transfers from `solver_yt_src` below.
+    #[account(mut)]
+    pub caller_yt_dst: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    pub mint_sy: Box<InterfaceAccount<'info, Mint>>,
+
+    pub solver: Signer<'info>,
+
+    pub core_token_program: Interface<'info, TokenInterface>,
+
+    // -- Remaining accounts the test harness passes through --
+    /// Solver's pre-funded YT inventory ATA — drained on MODE_OK to
+    /// land yt_required YT in caller_yt_dst.
+    #[account(mut)]
+    pub solver_yt_src: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// YT mint — needed for transfer_checked decimals.
+    pub mint_yt: Box<InterfaceAccount<'info, Mint>>,
 }
 
 #[error_code]

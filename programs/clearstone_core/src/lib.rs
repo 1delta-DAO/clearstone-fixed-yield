@@ -215,6 +215,22 @@ pub mod clearstone_core {
         instructions::market_two::flash_swap_sy::handler(ctx, pt_in, callback_data)
     }
 
+    /// Capital-free YT-to-SY route for fusion intents. Pre-advances
+    /// `sy_advance` SY to the solver, runs a callback (the solver's
+    /// `fusion.fill` lands `yt_in` YT in the solver's YT ATA), then
+    /// runs the inline sell_yt cascade to burn YT → SY and repays
+    /// `sy_advance` to the AMM. Surplus stays with the solver as profit.
+    /// See YT_DELIVERY_PLAN.md §D2 for the full design rationale.
+    #[instruction(discriminator = [23])]
+    pub fn flash_sell_yt<'info>(
+        ctx: Context<'_, '_, '_, 'info, FlashSellYt<'info>>,
+        yt_in: u64,
+        sy_advance: u64,
+        callback_data: Vec<u8>,
+    ) -> Result<FlashSellYtEvent> {
+        instructions::market_two::flash_sell_yt::handler(ctx, yt_in, sy_advance, callback_data)
+    }
+
     /// Sell YT for SY
     #[instruction(discriminator = [1])]
     pub fn sell_yt<'i>(

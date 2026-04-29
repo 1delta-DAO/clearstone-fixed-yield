@@ -326,6 +326,128 @@
       ]
     },
     {
+      "name": "wrapper_flash_sell_yt",
+      "docs": [
+        "Pure passthrough to `core.flash_sell_yt` (sell-YT direction). Same",
+        "account-shape rule as the buy/sell-PT wrappers — every named slot",
+        "forwards verbatim, remaining_accounts pass through untouched.",
+        "See YT_DELIVERY_PLAN.md §D2 for the on-chain semantics."
+      ],
+      "discriminator": [
+        156,
+        157,
+        126,
+        42,
+        111,
+        15,
+        167,
+        11
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "caller_sy_dst",
+          "writable": true
+        },
+        {
+          "name": "caller_pt_dst",
+          "writable": true
+        },
+        {
+          "name": "caller_yt_dst",
+          "docs": [
+            "Solver's YT ATA — not constrained on mint here because mint_yt",
+            "is an UncheckedAccount on core's struct (cpi-only). Core's inline",
+            "merge cascade enforces the linkage."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_sy_escrow",
+          "writable": true
+        },
+        {
+          "name": "token_pt_escrow",
+          "writable": true
+        },
+        {
+          "name": "token_fee_treasury_sy",
+          "writable": true
+        },
+        {
+          "name": "mint_sy",
+          "writable": true
+        },
+        {
+          "name": "mint_pt",
+          "writable": true
+        },
+        {
+          "name": "callback_program"
+        },
+        {
+          "name": "address_lookup_table"
+        },
+        {
+          "name": "sy_program"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "authority_vault",
+          "writable": true
+        },
+        {
+          "name": "token_sy_escrow_vault",
+          "writable": true
+        },
+        {
+          "name": "mint_yt",
+          "writable": true
+        },
+        {
+          "name": "address_lookup_table_vault"
+        },
+        {
+          "name": "yield_position_vault",
+          "writable": true
+        },
+        {
+          "name": "core_program"
+        },
+        {
+          "name": "core_event_authority"
+        }
+      ],
+      "args": [
+        {
+          "name": "yt_in",
+          "type": "u64"
+        },
+        {
+          "name": "sy_advance",
+          "type": "u64"
+        },
+        {
+          "name": "callback_data",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
       "name": "wrapper_flash_swap_pt",
       "docs": [
         "Pure passthrough to `core.flash_swap_pt`. Solvers/keepers that already",

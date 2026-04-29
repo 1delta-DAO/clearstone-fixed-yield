@@ -40,6 +40,7 @@ import {
   fetchMarketState,
   fetchVaultState,
   resolveSyCpiRemainingAccounts,
+  type MarketState,
 } from "./state.js";
 
 export async function buildAndSendFill(
@@ -125,13 +126,23 @@ export async function buildAndSendFill(
     });
   }
 
-  // Inventory path (tradePt / strip): core routing first → fusion.fill last.
+  // Inventory path (tradePt / strip / ytFromInventory / ytJustInTime):
+  // core routing first → fusion.fill last.
+  //   - `ytFromInventory` is a pure inventory drain (no core ix).
+  //   - `ytJustInTime` prepends `core.buy_yt(0, ytAmount)` which mints the
+  //     YT atomically with zero upfront SY. fusion.fill then delivers it.
   switch (plan.kind) {
     case "tradePt":
       tx.add(await buildTradePtIx(clients, plan));
       break;
     case "strip":
       tx.add(await buildStripIx(clients, plan));
+      break;
+    case "ytFromInventory":
+      // No core ix — solver's YT inventory is the funding source.
+      break;
+    case "ytJustInTime":
+      tx.add(await buildBuyYtJitIx(clients, plan));
       break;
   }
 
@@ -307,8 +318,15 @@ function encodeCallbackPayload(
 
 /** Helper: pull the src amount off any plan variant (only inventory plans hit this). */
 function planSrcAmount(plan: FillPlan): anchor.BN {
-  if (plan.kind === "flashFusion") return plan.fusionFillAmount;
-  return plan.srcAmount;
+  switch (plan.kind) {
+    case "flashFusion":
+      return plan.fusionFillAmount;
+    case "ytFromInventory":
+    case "ytJustInTime":
+      return plan.srcAmount;
+    default:
+      return plan.srcAmount;
+  }
 }
 
 async function buildTradePtIx(
@@ -390,6 +408,119 @@ async function buildStripIx(
     } as any)
     .remainingAccounts(remaining)
     .instruction();
+}
+
+/**
+ * Build `core.buy_yt(sy_in=0, yt_out=plan.ytAmount)` for the JIT YT
+ * delivery path.
+ *
+ * Why sy_in=0: buy_yt's internal cascade
+ *   (do_withdraw_sy → do_borrow_sy → do_cpi_strip → do_cpi_trade_pt →
+ *    do_repay_sy → do_deposit_sy)
+ * balances to a net SY change of `-sy_in` for the trader. With sy_in=0
+ * the trader (= solver) ends up with `yt_amount` YT in their YT ATA and
+ * zero SY change — capital-free YT minting in one ix.
+ *
+ * Account layout matches `BuyYt` in
+ * programs/clearstone_core/src/instructions/market_two/buy_yt.rs.
+ * Needs vault accounts (vault, vault_authority, mint_yt, etc.) on top
+ * of the market accounts because the internal `do_cpi_strip` traverses
+ * the vault's strip handler.
+ */
+async function buildBuyYtJitIx(
+  clients: SolverClients,
+  plan: Extract<FillPlan, { kind: "ytJustInTime" }>
+) {
+  const market = await findMarketForVault(clients, plan.vault);
+  if (!market) {
+    throw new Error(`no MarketTwo found for vault ${plan.vault.toBase58()}`);
+  }
+  const vault = await fetchVaultState(clients, plan.vault);
+  const alt = await fetchAlt(clients, market.addressLookupTable);
+
+  // buy_yt's CPI chain hits get_sy_state + deposit_sy + withdraw_sy
+  // (the borrow leg withdraws, the repay leg deposits).
+  const remaining = resolveSyCpiRemainingAccounts(
+    [
+      market.cpiAccounts.getSyState,
+      market.cpiAccounts.depositSy,
+      market.cpiAccounts.withdrawSy,
+    ],
+    alt
+  );
+
+  const solver = clients.solver.publicKey;
+  const tokenSyTrader = getAssociatedTokenAddressSync(
+    market.mintSy,
+    solver,
+    false,
+    TOKEN_PROGRAM_ID
+  );
+  const tokenPtTrader = getAssociatedTokenAddressSync(
+    market.mintPt,
+    solver,
+    false,
+    TOKEN_PROGRAM_ID
+  );
+  const tokenYtTrader = getAssociatedTokenAddressSync(
+    vault.mintYt,
+    solver,
+    false,
+    TOKEN_PROGRAM_ID
+  );
+
+  return clients.clearstoneCore.methods
+    .buyYt(new (await import("@coral-xyz/anchor")).BN(0), plan.ytAmount)
+    .accounts({
+      trader: solver,
+      market: market.publicKey,
+      tokenSyTrader,
+      tokenYtTrader,
+      tokenPtTrader,
+      tokenSyEscrow: market.tokenSyEscrow,
+      tokenPtEscrow: market.tokenPtEscrow,
+      mintSy: market.mintSy,
+      tokenFeeTreasurySy: market.tokenFeeTreasurySy,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      addressLookupTable: market.addressLookupTable,
+      syProgram: market.syProgram,
+      vaultAuthority: vault.authority,
+      vault: vault.publicKey,
+      tokenSyEscrowVault: vault.escrowSy,
+      mintYt: vault.mintYt,
+      mintPt: vault.mintPt,
+      addressLookupTableVault: vault.addressLookupTable,
+      yieldPosition: vault.yieldPosition,
+    } as any)
+    .remainingAccounts(remaining)
+    .instruction();
+}
+
+/**
+ * Find the canonical MarketTwo for a given vault (the buy_yt ix needs
+ * market accounts, not just vault). Mirrors `findDefaultMarket` in
+ * route.ts but takes the vault PDA directly.
+ */
+async function findMarketForVault(
+  clients: SolverClients,
+  vault: PublicKey
+): Promise<
+  | null
+  | (MarketState & {
+      // Extra slot — kept for future seedId picking (today we just take
+      // the first match, same as route.ts).
+    })
+> {
+  const all = await (clients.clearstoneCore.account as any).marketTwo.all([
+    {
+      memcmp: {
+        offset: 8 + 32 + 2 + 1 + 32 + 32 + 32, // vault field offset in MarketTwo
+        bytes: vault.toBase58(),
+      },
+    },
+  ]);
+  if (all.length === 0) return null;
+  return await fetchMarketState(clients, all[0].publicKey as PublicKey);
 }
 
 /**

@@ -296,6 +296,9 @@ mode), the policy gates which solver can settle the order. The
 - [PLAN.md](PLAN.md) — top-level invariant scaffolding for the core.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — program-level diagram of how the
   pieces compose.
+- [YT_DELIVERY_PLAN.md](YT_DELIVERY_PLAN.md) — design doc for adding
+  YT-as-dst (or YT-as-src) intent flows. Inventory-only solvers work
+  today; the v2 `flash_swap_yt` route is scoped there.
 - [INTERFACE.md](INTERFACE.md) — exact ix signatures, account lists,
   error codes.
 - [INVARIANTS.md](INVARIANTS.md) — proofs that each invariant holds.

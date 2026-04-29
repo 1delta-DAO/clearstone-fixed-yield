@@ -63,6 +63,12 @@ export type MockFlashCallback = {
           "writable": true
         },
         {
+          "name": "mintPt",
+          "docs": [
+            "the M-FLASH-1.5 hardening that added `mint_pt` to FlashSwapPt accounts)."
+          ]
+        },
+        {
           "name": "addressLookupTable"
         },
         {
@@ -85,6 +91,86 @@ export type MockFlashCallback = {
         },
         {
           "name": "syRequired",
+          "type": "u64"
+        },
+        {
+          "name": "data",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "onFlashSellYtReceived",
+      "docs": [
+        "Mirror of `on_flash_sy_received` for the sell-YT direction. Core's",
+        "`flash_sell_yt` has already advanced `sy_received` SY to the solver",
+        "(in `caller_sy_dst`) and now expects the callback to populate",
+        "`caller_yt_dst` with at least `yt_required` YT. In production the",
+        "callback runs fusion.fill (maker.YT → solver, solver.SY → maker);",
+        "the mock simply transfers from a pre-funded `solver_yt_src` ATA."
+      ],
+      "discriminator": [
+        73,
+        66,
+        24,
+        164,
+        149,
+        35,
+        51,
+        85
+      ],
+      "accounts": [
+        {
+          "name": "market"
+        },
+        {
+          "name": "callerSyDst",
+          "docs": [
+            "Solver's SY ATA — pre-loaded with `sy_received` SY. In production",
+            "the callback drains it via fusion.fill; the mock leaves it alone."
+          ],
+          "writable": true
+        },
+        {
+          "name": "callerYtDst",
+          "docs": [
+            "Solver's YT ATA — must be topped up by ≥ `yt_required` before",
+            "returning. The mock transfers from `solver_yt_src` below."
+          ],
+          "writable": true
+        },
+        {
+          "name": "mintSy"
+        },
+        {
+          "name": "solver",
+          "signer": true
+        },
+        {
+          "name": "coreTokenProgram"
+        },
+        {
+          "name": "solverYtSrc",
+          "docs": [
+            "Solver's pre-funded YT inventory ATA — drained on MODE_OK to",
+            "land yt_required YT in caller_yt_dst."
+          ],
+          "writable": true
+        },
+        {
+          "name": "mintYt",
+          "docs": [
+            "YT mint — needed for transfer_checked decimals."
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "syReceived",
+          "type": "u64"
+        },
+        {
+          "name": "ytRequired",
           "type": "u64"
         },
         {

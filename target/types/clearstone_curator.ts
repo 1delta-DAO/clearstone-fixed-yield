@@ -1223,63 +1223,63 @@ export type ClearstoneCurator = {
   "errors": [
     {
       "code": 6000,
-      "name": "slippageTooWide",
-      "msg": "max_slippage_bps exceeds 1000 (10%)"
+      "name": "unauthorized",
+      "msg": "unauthorized"
     },
     {
       "code": 6001,
-      "name": "ttlTooShort",
-      "msg": "ttl_slots below minimum (~1 day)"
+      "name": "zeroAmount",
+      "msg": "Amount must be greater than zero"
     },
     {
       "code": 6002,
-      "name": "ttlTooLong",
-      "msg": "ttl_slots above maximum (~100 days)"
+      "name": "feeTooHigh",
+      "msg": "Performance fee exceeds 20% cap"
     },
     {
       "code": 6003,
-      "name": "expired",
-      "msg": "delegation has expired"
+      "name": "weightsExceedFull",
+      "msg": "Allocation weights exceed 100%"
     },
     {
       "code": 6004,
-      "name": "allocationsDrifted",
-      "msg": "vault allocations have changed since the user signed"
+      "name": "overflow",
+      "msg": "Arithmetic overflow"
     },
     {
       "code": 6005,
-      "name": "vaultMismatch",
-      "msg": "delegation vault does not match the vault in the instruction"
+      "name": "notYetImplemented",
+      "msg": "Not yet implemented"
     },
     {
       "code": 6006,
-      "name": "indexOor",
-      "msg": "allocation index out of range"
+      "name": "insufficientShares",
+      "msg": "Position has fewer shares than requested"
     },
     {
       "code": 6007,
-      "name": "marketMismatch",
-      "msg": "market PDA does not match the allocation at the given index"
+      "name": "insufficientAssets",
+      "msg": "Vault escrow has insufficient base liquid; curator must rebalance"
     },
     {
       "code": 6008,
-      "name": "fromMarketNotMatured",
-      "msg": "from_market has not yet reached its expiration timestamp"
+      "name": "allocationIndexOutOfRange",
+      "msg": "Allocation index out of range for this vault"
     },
     {
       "code": 6009,
-      "name": "slippageBelowDelegationFloor",
-      "msg": "keeper min_base_out is below the delegation's slippage floor"
+      "name": "allocationMarketMismatch",
+      "msg": "Market passed does not match the allocation entry"
     },
     {
       "code": 6010,
-      "name": "nothingToRoll",
-      "msg": "allocation has zero deployed_base — nothing to roll"
+      "name": "allocationCapExceeded",
+      "msg": "Allocation cap would be exceeded"
     },
     {
       "code": 6011,
-      "name": "deployedBaseDrift",
-      "msg": "vault_lp_ata balance is below the allocation's deployed_base"
+      "name": "missingKaminoAccount",
+      "msg": "sy_program is kamino_sy_adapter but a required kamino_* account was not provided"
     }
   ],
   "types": [

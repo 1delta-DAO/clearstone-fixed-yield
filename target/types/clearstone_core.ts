@@ -561,6 +561,158 @@ export type ClearstoneCore = {
       }
     },
     {
+      "name": "flashSellYt",
+      "docs": [
+        "Capital-free YT-to-SY route for fusion intents. Pre-advances",
+        "`sy_advance` SY to the solver, runs a callback (the solver's",
+        "`fusion.fill` lands `yt_in` YT in the solver's YT ATA), then",
+        "runs the inline sell_yt cascade to burn YT → SY and repays",
+        "`sy_advance` to the AMM. Surplus stays with the solver as profit.",
+        "See YT_DELIVERY_PLAN.md §D2 for the full design rationale."
+      ],
+      "discriminator": [
+        23
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Marked `mut` so the inner fusion.fill CPI (which declares `taker`",
+            "writable) doesn't trip \"writable privilege escalated\" — same",
+            "rationale as flash_swap_pt's caller."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "callerSyDst",
+          "docs": [
+            "Solver's SY ATA: the borrow lands here in step 3, the callback",
+            "drains it (delivering to maker via fusion.fill), and the cascade",
+            "re-fills it via merge."
+          ],
+          "writable": true
+        },
+        {
+          "name": "callerPtDst",
+          "docs": [
+            "Solver's PT ATA — temporary parking spot for the borrow_pt /",
+            "trade_pt round-trip in the cascade."
+          ],
+          "writable": true
+        },
+        {
+          "name": "callerYtDst",
+          "docs": [
+            "Solver's YT ATA: where the callback (= fusion.fill) deposits the",
+            "maker's YT, and where the cascade burns from in the merge step."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenSyEscrow",
+          "writable": true
+        },
+        {
+          "name": "tokenPtEscrow",
+          "writable": true
+        },
+        {
+          "name": "tokenFeeTreasurySy",
+          "writable": true
+        },
+        {
+          "name": "mintSy",
+          "docs": [
+            "`mut` because the SY adapter's `withdraw_sy`/`deposit_sy` CPIs",
+            "declare `sy_mint` writable (Token's MintTo / Burn updates the",
+            "mint's supply). When the same pubkey appears in both a named",
+            "slot (here) and a `remaining_accounts` entry, Anchor / web3.js",
+            "uses the named slot's flag — so it must be `mut` for the inner",
+            "CPI's writable requirement not to trip \"writable privilege",
+            "escalated\". (flash_swap_sy.rs gets away without `mut` here only",
+            "because its outer tx happens to land mint_sy via remaining_accounts",
+            "before the named slot in some account-resolution paths; not a",
+            "pattern to rely on.)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "mintPt",
+          "docs": [
+            "`mut` because the inline merge cascade burns PT (Token's Burn ix",
+            "updates the mint's supply field). Without `mut` here the inner",
+            "merge CPI would trip \"writable privilege escalated\"."
+          ],
+          "writable": true
+        },
+        {
+          "name": "callbackProgram"
+        },
+        {
+          "name": "addressLookupTable"
+        },
+        {
+          "name": "syProgram"
+        },
+        {
+          "name": "tokenProgram"
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "authorityVault",
+          "writable": true
+        },
+        {
+          "name": "tokenSyEscrowVault",
+          "writable": true
+        },
+        {
+          "name": "mintYt",
+          "writable": true
+        },
+        {
+          "name": "addressLookupTableVault"
+        },
+        {
+          "name": "yieldPositionVault",
+          "writable": true
+        },
+        {
+          "name": "eventAuthority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "ytIn",
+          "type": "u64"
+        },
+        {
+          "name": "syAdvance",
+          "type": "u64"
+        },
+        {
+          "name": "callbackData",
+          "type": "bytes"
+        }
+      ],
+      "returns": {
+        "defined": {
+          "name": "flashSellYtEvent"
+        }
+      }
+    },
+    {
       "name": "flashSwapPt",
       "docs": [
         "Pendle-style flash borrow of PT against the market's escrow.",
@@ -2100,6 +2252,19 @@ export type ClearstoneCore = {
       ]
     },
     {
+      "name": "flashSellYtEvent",
+      "discriminator": [
+        48,
+        33,
+        191,
+        210,
+        134,
+        212,
+        92,
+        48
+      ]
+    },
+    {
       "name": "flashSwapPtEvent",
       "discriminator": [
         193,
@@ -2471,6 +2636,16 @@ export type ClearstoneCore = {
       "code": 6042,
       "name": "flashSizeExceedsCap",
       "msg": "Flash size exceeds FLASH_MAX_PT_BPS of pool PT — split into multiple flashes"
+    },
+    {
+      "code": 6043,
+      "name": "flashYtCallbackUnderdelivered",
+      "msg": "flash_sell_yt callback didn't deliver enough YT into the solver's YT ATA"
+    },
+    {
+      "code": 6044,
+      "name": "flashSellYtNetUnderwater",
+      "msg": "flash_sell_yt internal cascade produced less SY than the advance — solver loss"
     }
   ],
   "types": [
@@ -3298,6 +3473,58 @@ export type ClearstoneCore = {
           {
             "name": "feeBps",
             "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "flashSellYtEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "caller",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "callbackProgram",
+            "type": "pubkey"
+          },
+          {
+            "name": "ytIn",
+            "type": "u64"
+          },
+          {
+            "name": "syAdvance",
+            "type": "u64"
+          },
+          {
+            "name": "syRecvFromMerge",
+            "type": "u64"
+          },
+          {
+            "name": "sySpentBuyingPt",
+            "type": "u64"
+          },
+          {
+            "name": "sySolverProfit",
+            "type": "u64"
+          },
+          {
+            "name": "syExchangeRate",
+            "type": {
+              "defined": {
+                "name": "number"
+              }
+            }
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
