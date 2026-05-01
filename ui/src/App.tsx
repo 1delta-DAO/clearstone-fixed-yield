@@ -5,16 +5,22 @@ import { LpProvision } from "./pages/LpProvision.js";
 import { BuyPt } from "./pages/BuyPt.js";
 import { IntentFill } from "./pages/IntentFill.js";
 import { Setup } from "./pages/Setup.js";
+import { Sourcing } from "./pages/Sourcing.js";
 import { StackContext } from "./lib/stack-context.js";
 import { loadStack, saveStack, type CanonicalStack } from "./lib/deployments.js";
 
-type Tab = "setup" | "lp" | "buy_pt" | "intent_fill";
+type Tab = "setup" | "sourcing" | "lp" | "buy_pt" | "intent_fill";
 
 const TABS: { id: Tab; label: string; subtitle: string }[] = [
   {
     id: "setup",
     label: "Setup",
     subtitle: "active deployment handles + override JSON",
+  },
+  {
+    id: "sourcing",
+    label: "Sourcing",
+    subtitle: "USDC → SY (mint_sy) and SY → PT+YT (strip); pre-flight balances",
   },
   {
     id: "lp",
@@ -99,6 +105,7 @@ export function App() {
 
       <section style={{ minHeight: 320 }}>
         {tab === "setup" && <Setup />}
+        {tab === "sourcing" && <Sourcing />}
         {tab === "lp" && <LpProvision />}
         {tab === "buy_pt" && <BuyPt />}
         {tab === "intent_fill" && <IntentFill />}

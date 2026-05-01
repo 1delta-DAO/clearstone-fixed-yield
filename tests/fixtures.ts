@@ -480,15 +480,19 @@ export async function createAndExtendAlt(params: {
     }
   }
 
-  // 5s grace: even with `confirmed` polling above, the very first ALT
+  // 12s grace: even with `confirmed` polling above, the very first ALT
   // of a fresh validator session can be invisible to *both* preflight
   // simulation and the on-chain bank that processes the next tx for
   // several seconds — a tx that calls `deserialize_lookup_table` on
   // a brand-new ALT can come back with an empty addresses vec, which
   // then makes the inner deposit_sy CPI reference pubkeys not in the
   // outer tx and revert with `MissingAccount`. Empirically 4s clears
-  // it; 5s gives a small safety margin without dragging the suite.
-  await sleep(5000);
+  // it on a hot validator; the very first ALT after `solana-test-validator`
+  // boot can need 10s+ on resource-constrained boxes (was tripping
+  // tests/clearstone-fusion-flash.ts::flash_sell_yt::happy-path on
+  // first-test position). 12s gives the cold case a comfortable margin
+  // and only adds 7s to suites where freshFlashStack runs once.
+  await sleep(12000);
   return altAddress;
 }
 
@@ -516,16 +520,24 @@ export async function retryOnAltCacheLag<T>(fn: () => Promise<T>): Promise<T> {
     const blob = parts.join("\n");
     return (
       blob.includes("An account required by the instruction is missing") ||
-      blob.includes("Instruction references an unknown account")
+      blob.includes("Instruction references an unknown account") ||
+      // Raw RPC-error JSON shape: {"InstructionError":[<idx>,"MissingAccount"]}
+      // The Anchor SendTransactionError surfaces this when `skipPreflight=false`
+      // catches the ALT-lag at submit time rather than preflight. Same
+      // root cause; same retry strategy.
+      blob.includes("\"MissingAccount\"") ||
+      blob.includes("\"NotEnoughAccountKeys\"")
     );
   };
 
   let lastErr: any;
-  // Up to 4 attempts at 5s spacing: the validator's simulator-cache
-  // lag on the first ALT of a session can run past 10s in cold-start
-  // conditions, so a tight retry loop catches it without dragging out
-  // the steady-state common case.
-  for (let attempt = 0; attempt < 4; attempt++) {
+  // Up to 8 attempts at 5s spacing (was 4×5s): the validator's
+  // simulator-cache lag on the first ALT of a session can run past
+  // 20s in cold-start conditions on resource-constrained CI boxes
+  // (the 4-retry budget was insufficient for tests/clearstone-fusion-flash.ts'
+  // first market init when the suite runs that test first). 8 retries
+  // gives 40s of grace on top of `createAndExtendAlt`'s 12s base.
+  for (let attempt = 0; attempt < 8; attempt++) {
     try {
       return await fn();
     } catch (e: any) {

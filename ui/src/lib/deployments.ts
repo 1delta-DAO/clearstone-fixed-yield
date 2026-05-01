@@ -46,6 +46,50 @@ export interface CanonicalStack {
   };
 }
 
+/**
+ * Non-delta-mint TEST stack from `deployments/devnet.json::canonicalStack`.
+ * Bound to a plain SPL test USDC (mint authority = AhKNm…); klend-side
+ * reserve uses mock_klend, no governor / delta_mint whitelisting in
+ * the path. Useful when Solstice's wallet-whitelist gate is blocking
+ * you from sourcing the live kaminoStack's underlying.
+ */
+export const DEVNET_TEST_STACK: CanonicalStack = {
+  cluster: "devnet",
+  rpcUrl: "https://api.devnet.solana.com",
+  lastUpdated: "2026-04-25",
+  programs: {
+    clearstone_core: new PublicKey("DZmP7zaBrc6FdJc842aeexnGV5YwPucg2Jv8p6Szh6hW"),
+    clearstone_router: new PublicKey("DenU4j4oV4wCMCsytrfYuFwAumTE1abFAPmpYDpjWmsW"),
+    clearstone_curator: new PublicKey("831zw8r2fGwRB1QpuRU3gZHZBFYYHBHeG7RbKUz9ssGm"),
+    clearstone_solver_callback: new PublicKey("27UhEF34wbyPdZw4nnAFUREU5LHMFs55PethnhJ6yNCP"),
+    clearstone_fusion: new PublicKey("9ShSnLUcWeg5BZzokj8mdo9cNHARCKa42kwmqSdBNM6J"),
+    generic_exchange_rate_sy: new PublicKey("HA1T2p7DkktepgtwrVqNBK8KidAYr5wvS1uKqzvScNm3"),
+    kamino_sy_adapter: new PublicKey("29tisXppYM4NcAEJfzMe1aqyuf2M7w9StTtiXBHxTKxd"),
+  },
+  // canonicalStack handles; the kaminoStack-shaped fields below are
+  // mapped from the canonicalStack equivalents (klendReserve / klendPyth
+  // / collateralVault aren't part of canonicalStack — populated as
+  // sentinels and ignored when the SY adapter is generic_exchange_rate_sy).
+  kaminoStack: {
+    baseMint: new PublicKey("2tboZ672zptawbXLUrcqfF7YkkS1kzDS4ewwxtjuog1G"),
+    syMetadata: new PublicKey("3yyrgJCEnNZQbN3eHoP246viEfrngHU6R7wrRJttW1U9"), // = syMarket
+    syMint: new PublicKey("AeS5fqx1tSiTHMhuCzKzrXgKz24qApVqU8mM9i47jGQr"),
+    klendReserve: new PublicKey("11111111111111111111111111111111"),
+    klendCollateralMint: new PublicKey("11111111111111111111111111111111"),
+    klendPyth: new PublicKey("11111111111111111111111111111111"),
+    poolEscrow: new PublicKey("2feAkSKmHyq23KYcczNt1P3Dq8qn9H1BUv1qeLmbGL7z"),
+    collateralVault: new PublicKey("11111111111111111111111111111111"),
+    curatorVault: new PublicKey("Fv8WuFXpDNmCq5Hnky7NAhf1adeMjUqLBiVsUHwYaSzR"),
+    ptVault: new PublicKey("3GxRCCqtSjf9NpMdqFbTsSKdnc7yseppyKoTfuUvoKtz"),
+    vaultAuthority: new PublicKey("33jAGhS5g2Ar5G381y8Sc9efMcDoqeeifDW3oahQM51T"),
+    mintPt: new PublicKey("E95GtsvrpJWsHFN3do6itmXw73m1owRkEnCLS7FB7rwD"),
+    mintYt: new PublicKey("Hh2igJmzyXAG8Htjx5c8jKmDLnbRFMUxUH6TL1QPgCTM"),
+    ammMarket: new PublicKey("9DtXvD662X8RBUK5GeEsSxWPpWYz9DwQ1efmzF53Virz"),
+    mintLp: new PublicKey("EpctHDaEaCfuwr18on7hd9K1NaPTqdRk2jWjWDdTG2sh"),
+    marketAlt: new PublicKey("CNWub9Mz2FpcbukLoSuqCBSMTsHSk7h8xw73W5WHczma"),
+  },
+};
+
 export const DEVNET_DEFAULT: CanonicalStack = {
   cluster: "devnet",
   rpcUrl: "https://api.devnet.solana.com",

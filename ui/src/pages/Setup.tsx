@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { useStack } from "../lib/stack-context.js";
-import { clearStackOverride } from "../lib/deployments.js";
+import {
+  clearStackOverride,
+  DEVNET_DEFAULT,
+  DEVNET_TEST_STACK,
+} from "../lib/deployments.js";
+import { formatError } from "../lib/format.js";
 
 // Setup tab: shows the active deployment handles + lets the user paste
 // an override JSON to swap in a local validator's stack. Persists to
@@ -25,7 +30,7 @@ export function Setup() {
       replace(parsed);
       setEditing(false);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatError(e));
     }
   }
 
@@ -49,13 +54,41 @@ export function Setup() {
       <Block title="Programs" obj={stack.programs} />
       <Block title="Kamino stack (Solstice USDC)" obj={stack.kaminoStack} />
 
-      <div style={{ marginTop: 24, display: "flex", gap: 8 }}>
+      <div style={{ marginTop: 24, display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button onClick={() => setEditing((v) => !v)} style={btnSecondary}>
           {editing ? "Cancel" : "Override"}
         </button>
         <button onClick={handleReset} style={btnSecondary}>
-          Reset to defaults
+          Reset to live (kaminoStack)
         </button>
+        <button
+          onClick={() => {
+            replace(DEVNET_TEST_STACK);
+            setDraft(stringifyStack(DEVNET_TEST_STACK));
+          }}
+          style={btnSecondary}
+          title="Switch to canonicalStack (plain SPL test USDC; no delta-mint whitelist gate)"
+        >
+          Use test stack (no whitelist)
+        </button>
+        <button
+          onClick={() => {
+            replace(DEVNET_DEFAULT);
+            setDraft(stringifyStack(DEVNET_DEFAULT));
+          }}
+          style={btnSecondary}
+          title="Switch to live Solstice-USDC kaminoStack"
+        >
+          Use live stack (Solstice USDC)
+        </button>
+      </div>
+      <div style={{ marginTop: 12, fontSize: 11, color: "#666", lineHeight: 1.5 }}>
+        Hitting <code>AccountNotInitialized (3012 / 0xbc4)</code> on Solstice's
+        SOL→csSOL wrap? That's delta_mint's whitelist gate — your wallet needs
+        a <code>WhitelistEntry</code> PDA created by the pool authority before
+        you can receive csSOL. Either get whitelisted out-of-band, or click
+        "Use test stack" above to drive Clearstone's sourcing/LP flow against
+        a plain SPL test USDC mint with no whitelist gate.
       </div>
 
       {editing && (

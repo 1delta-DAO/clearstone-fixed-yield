@@ -52,6 +52,25 @@ yarn run tsx scripts/devnet-e2e.ts             # SY → vault → market → rou
   harvest_fees → farm_state). Prints canonical handles to paste
   into DEPLOY_IDS.md. Each run creates fresh PDAs; previous handles
   remain live.
+- **`kyc_pool_setup.ts`** — operator CLI for standing up a delta-mint
+  KYC pool over an underlying mint. Runs the three-ix sequence
+  `governor.initialize_pool` → `activate_wrapping` → `fix_co_authority`,
+  prints the wrapped d-token mint + dm_mint_config + pool_config so
+  you can paste them into a klend reserve config or `deployments.json`.
+  Mirrors `tests/kyc_fixtures.ts::initAndActivateKycPool`.
+- **`klend_admin_eMode.ts`** — operator CLI for reconfiguring a klend
+  elevation group. Wraps `klend.update_lending_market(mode=9, value=
+  <72B ElevationGroup>)`. Reads the current group, applies the CLI
+  overrides on top, sends, and reads back to verify. Use for
+  raising the wSOL debt cap, repointing `debt_reserve` to a KYC
+  reserve, or flipping `allow_new_loans`. `--dump` prints the
+  current group without sending.
+- **`kyc_whitelist.ts`** — operator CLI for whitelisting individual
+  wallets on a running KYC pool (`governor.add_participant_via_pool`).
+  Defaults to role=Holder (lets the wallet receive `mint_to`).
+  Accepts `--wallet <pk>` or `--wallets pk1,pk2,…` and sends one tx
+  per wallet (no batching — keeps wire size constant). Pass
+  `--skip-existing` to make re-runs idempotent.
 - **`devnet-health.ts`** — daily snapshot of the live stack: hits
   every `programs.*` entry in `deployments/devnet.json` with
   status="live", checks the program account exists + is owned by

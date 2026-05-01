@@ -1,93 +1,328 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey } from "@solana/web3.js";
-import { CLEARSTONE_ROUTER } from "../lib/programs.js";
+import { BN, Program } from "@coral-xyz/anchor";
+import {
+  PublicKey,
+  Transaction,
+  ComputeBudgetProgram,
+} from "@solana/web3.js";
+import { createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
+import { useStack } from "../lib/stack-context.js";
+import { useAnchorProvider, idl } from "../lib/anchor.js";
+import {
+  ataBalance,
+  readPosition,
+  syCpiRemainingAccounts,
+  userAta,
+} from "../lib/accounts.js";
+import { formatError } from "../lib/format.js";
+import { useTxLog } from "../components/TxLog.js";
 import { MarketPicker } from "../components/MarketPicker.js";
 
 // Buy-PT flow — `clearstone_router.wrapper_buy_pt`.
 //
-// On-chain composition (see FLOWS.md §1):
-//   user.base_ata  ──► adapter.mint_sy   ──► user.sy_ata
-//                              │
-//                              └──► core.trade_pt(net_trader_pt = +pt_amount)
+//   user.base_ata ─► adapter.mint_sy ─► user.sy_ata
+//                                          │
+//                                          └► core.trade_pt(net_pt = +pt_amount)
 //
-// This page is a STUB — it surfaces the args the user would need to
-// provide, but doesn't actually build the tx. Wiring in the real call
-// requires loading the IDL via @coral-xyz/anchor, deriving the market's
-// ALT-resolved remaining_accounts, and signing with the connected wallet.
-// See `tests/clearstone-router.ts` for a working reference.
+// Hardwired to `generic_exchange_rate_sy` on the wrapper side
+// (see periphery/clearstone_router/src/lib.rs::WrapperBuyPt — the
+// sy_program field is `Program<'info, GenericExchangeRateSy>`). For the
+// Kamino-backed devnet stack you'd need a kamino-specific buy_pt
+// wrapper; not in scope here. Use the Setup tab's "Use test stack"
+// button to switch to the canonicalStack handles, which use the generic
+// adapter and can drive this wrapper.
+//
+// Account assembly: load MarketTwo on-chain for `cpi_accounts` /
+// `address_lookup_table` / `token_pt_escrow` / `token_sy_escrow` /
+// `token_fee_treasury_sy`, derive `base_vault` from `["pool_escrow",
+// sy_market, base_mint]` under the SY adapter program id, and feed the
+// SY-CPI extras through `remaining_accounts`. Same pattern Sourcing.tsx
+// + LpProvision.tsx use.
+
+const BUY_CU = 800_000;
+
+// Generic adapter PDA seed — see `reference_adapters/generic_exchange_rate_sy::POOL_ESCROW_SEED`.
+const POOL_ESCROW_SEED = Buffer.from("pool_escrow");
 
 export function BuyPt() {
   const { connection } = useConnection();
-  const { publicKey, signTransaction } = useWallet();
-  const [marketPk, setMarketPk] = useState("");
+  const { publicKey, sendTransaction } = useWallet();
+  const { stack } = useStack();
+  const provider = useAnchorProvider();
+
+  const [marketPk, setMarketPk] = useState(stack.kaminoStack.ammMarket.toBase58());
   const [ptAmount, setPtAmount] = useState("100000");
-  const [maxBase, setMaxBase] = useState("110000");
-  const [status, setStatus] = useState<string | null>(null);
+  const [maxBase, setMaxBase] = useState("500000");
+  // Negative because SY leaves the user when buying PT (core/trade_pt sign convention).
+  const [maxSyIn, setMaxSyIn] = useState("-500000");
+  const [busy, setBusy] = useState(false);
+  const [position, setPosition] = useState<{
+    base: bigint;
+    sy: bigint;
+    pt: bigint;
+  } | null>(null);
+
+  const { log, LogPanel } = useTxLog();
+
+  async function refresh() {
+    if (!publicKey) return;
+    try {
+      const pos = await readPosition({
+        connection,
+        owner: publicKey,
+        baseMint: stack.kaminoStack.baseMint,
+        syMint: stack.kaminoStack.syMint,
+        ptMint: stack.kaminoStack.mintPt,
+        ytMint: stack.kaminoStack.mintYt,
+        lpMint: stack.kaminoStack.mintLp,
+      });
+      setPosition({ base: pos.base, sy: pos.sy, pt: pos.pt });
+    } catch (e) {
+      log("error", `position read failed: ${formatError(e)}`);
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publicKey?.toBase58(), stack.kaminoStack.ammMarket.toBase58()]);
 
   async function handleBuy() {
-    if (!publicKey || !signTransaction) {
-      setStatus("connect a wallet first");
+    if (!publicKey || !provider || !sendTransaction) {
+      log("error", "connect a wallet");
       return;
     }
-    if (!marketPk) {
-      setStatus("market pubkey required");
-      return;
-    }
+    let market: PublicKey;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const _market = new PublicKey(marketPk);
+      market = new PublicKey(marketPk);
     } catch {
-      setStatus("invalid market pubkey");
+      log("error", "invalid market pubkey");
       return;
     }
-    setStatus(
-      `[stub] would call clearstone_router.wrapper_buy_pt(pt_amount=${ptAmount}, max_base=${maxBase}, max_sy_in=…) — see FLOWS.md §1.`
-    );
-    // Production wiring: load the router program via
-    // `new anchor.Program(routerIdl, provider)`, derive the market's
-    // address_lookup_table from the market account, build the
-    // `wrapper_buy_pt` ix, sign + send. The remaining_accounts list is
-    // the union of the SY adapter's `mint_sy` + `trade_pt` CPI extras
-    // (see tests/fixtures.ts for the canonical builder).
-    void connection; // referenced to silence the unused-import lint
+    setBusy(true);
+    try {
+      log("info", `buy_pt(pt_amount=${ptAmount}, max_base=${maxBase}, max_sy_in=${maxSyIn})`);
+
+      const core = new Program(
+        idl.clearstoneCore,
+        provider
+      ) as unknown as Program;
+      const router = new Program(
+        idl.clearstoneRouter,
+        provider
+      ) as unknown as Program;
+
+      // Read MarketTwo on-chain for cpi_accounts + ALT + escrows + treasury.
+      const marketAcct = (await (core.account as Record<string, { fetch: (pk: PublicKey) => Promise<unknown> }>).marketTwo.fetch(
+        market
+      )) as {
+        addressLookupTable: PublicKey;
+        mintPt: PublicKey;
+        mintSy: PublicKey;
+        tokenPtEscrow: PublicKey;
+        tokenSyEscrow: PublicKey;
+        tokenFeeTreasurySy: PublicKey;
+        syProgram: PublicKey;
+        cpiAccounts: {
+          getSyState: { altIndex: number; isWritable: boolean; isSigner: boolean }[];
+          depositSy: { altIndex: number; isWritable: boolean; isSigner: boolean }[];
+          withdrawSy: { altIndex: number; isWritable: boolean; isSigner: boolean }[];
+        };
+      };
+
+      // wrapper_buy_pt is hardwired to generic_exchange_rate_sy. Bail
+      // out cleanly if the market's sy_program is something else
+      // (e.g. kamino_sy_adapter on the live Solstice stack).
+      if (!marketAcct.syProgram.equals(stack.programs.generic_exchange_rate_sy)) {
+        log(
+          "error",
+          `market.sy_program=${marketAcct.syProgram.toBase58()} ≠ generic_exchange_rate_sy. wrapper_buy_pt only works with the generic adapter; switch to the test stack via the Setup tab.`
+        );
+        return;
+      }
+
+      const remainingAccounts = await syCpiRemainingAccounts({
+        connection,
+        cpiAccounts: marketAcct.cpiAccounts,
+        alt: marketAcct.addressLookupTable,
+      });
+      log("info", `cpi extras = ${remainingAccounts.length} accounts`);
+
+      // Generic adapter base_vault PDA: ["pool_escrow", sy_market, base_mint].
+      const [baseVault] = PublicKey.findProgramAddressSync(
+        [
+          POOL_ESCROW_SEED,
+          stack.kaminoStack.syMetadata.toBuffer(),
+          stack.kaminoStack.baseMint.toBuffer(),
+        ],
+        marketAcct.syProgram
+      );
+
+      const { ata: userBaseAta, tokenProgram: baseTokenProgram } = await userAta(
+        connection,
+        publicKey,
+        stack.kaminoStack.baseMint
+      );
+      const { ata: userSyAta } = await userAta(
+        connection,
+        publicKey,
+        marketAcct.mintSy
+      );
+      const { ata: userPtAta, tokenProgram: ptTokenProgram } = await userAta(
+        connection,
+        publicKey,
+        marketAcct.mintPt
+      );
+
+      // Pre-flight: surface a friendly warning if the user obviously
+      // can't cover the spend.
+      const baseBal = await ataBalance(connection, userBaseAta);
+      if (baseBal < BigInt(maxBase)) {
+        log("warn", `base balance ${baseBal} < max_base ${maxBase} — top up first`);
+      }
+
+      const [coreEventAuthority] = PublicKey.findProgramAddressSync(
+        [Buffer.from("__event_authority")],
+        stack.programs.clearstone_core
+      );
+
+      const tx = new Transaction()
+        .add(ComputeBudgetProgram.setComputeUnitLimit({ units: BUY_CU }))
+        // Idempotent ATA inits — first-time users may not have these yet.
+        .add(
+          createAssociatedTokenAccountIdempotentInstruction(
+            publicKey,
+            userSyAta,
+            publicKey,
+            marketAcct.mintSy,
+            baseTokenProgram
+          )
+        )
+        .add(
+          createAssociatedTokenAccountIdempotentInstruction(
+            publicKey,
+            userPtAta,
+            publicKey,
+            marketAcct.mintPt,
+            ptTokenProgram
+          )
+        );
+
+      const ix = await router.methods
+        .wrapperBuyPt(
+          new BN(ptAmount),
+          new BN(maxBase),
+          new BN(maxSyIn)
+        )
+        .accounts({
+          user: publicKey,
+          syMarket: stack.kaminoStack.syMetadata,
+          baseMint: stack.kaminoStack.baseMint,
+          syMint: marketAcct.mintSy,
+          baseSrc: userBaseAta,
+          baseVault,
+          market,
+          sySrc: userSyAta,
+          ptDst: userPtAta,
+          marketEscrowSy: marketAcct.tokenSyEscrow,
+          marketEscrowPt: marketAcct.tokenPtEscrow,
+          marketAlt: marketAcct.addressLookupTable,
+          tokenProgram: baseTokenProgram,
+          tokenFeeTreasurySy: marketAcct.tokenFeeTreasurySy,
+          syProgram: marketAcct.syProgram,
+          coreProgram: stack.programs.clearstone_core,
+          coreEventAuthority,
+        } as never)
+        .remainingAccounts(remainingAccounts)
+        .instruction();
+      tx.add(ix);
+
+      const sig = await sendTransaction(tx, connection);
+      const conf = await connection.confirmTransaction(sig, "confirmed");
+      if (conf.value.err) {
+        log("error", `on-chain err: ${JSON.stringify(conf.value.err)}`);
+      } else {
+        log("info", `buy_pt confirmed: ${sig}`);
+      }
+      await refresh();
+    } catch (e) {
+      log("error", formatError(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
-    <Section
-      title="Buy PT (router.wrapper_buy_pt)"
-      subtitle="base → SY → PT in one tx; leftover SY stays in your SY ATA"
-    >
-      <label style={{ display: "grid", gap: 4, fontSize: 13 }}>
-        <span style={{ color: "#8a8a8a" }}>Market</span>
-        <MarketPicker value={marketPk} onChange={setMarketPk} />
-      </label>
-      <Field label="PT amount (out)" value={ptAmount} onChange={setPtAmount} />
-      <Field label="Max base spend" value={maxBase} onChange={setMaxBase} />
-      <button onClick={handleBuy} style={btnStyle}>
-        Build + sign
-      </button>
-      {status && <div style={statusStyle}>{status}</div>}
-    </Section>
+    <div>
+      <h2 style={{ marginTop: 0, fontSize: 18 }}>Buy PT</h2>
+      <p style={{ color: "#8a8a8a", fontSize: 13 }}>
+        base → SY → PT in one tx via clearstone_router.wrapper_buy_pt.
+        Leftover SY stays in your SY ATA. Hardwired to the generic
+        exchange-rate adapter — switch to the test stack in Setup if the
+        live stack uses kamino_sy_adapter.
+      </p>
+
+      {position && (
+        <div
+          style={{
+            display: "grid",
+            gap: 6,
+            gridTemplateColumns: "repeat(3, 1fr)",
+            background: "#161618",
+            border: "1px solid #2a2a2e",
+            borderRadius: 4,
+            padding: "10px 14px",
+            margin: "12px 0",
+          }}
+        >
+          <Stat label="base" value={position.base} />
+          <Stat label="SY" value={position.sy} />
+          <Stat label="PT" value={position.pt} />
+        </div>
+      )}
+
+      <div style={{ display: "grid", gap: 12, maxWidth: 540 }}>
+        <label style={{ display: "grid", gap: 4, fontSize: 13 }}>
+          <span style={{ color: "#8a8a8a" }}>Market</span>
+          <MarketPicker value={marketPk} onChange={setMarketPk} />
+        </label>
+        <Field label="PT amount (out)" value={ptAmount} onChange={setPtAmount} />
+        <FieldWithMax
+          label="Max base spend"
+          value={maxBase}
+          onChange={setMaxBase}
+          available={position?.base}
+        />
+        <Field
+          label="Max SY in (negative — SY leaves user)"
+          value={maxSyIn}
+          onChange={setMaxSyIn}
+        />
+        <button onClick={handleBuy} style={btnStyle} disabled={busy}>
+          {busy ? "submitting…" : "Build + sign"}
+        </button>
+      </div>
+
+      <div style={{ marginTop: 24 }}>
+        <LogPanel title="buy_pt log" />
+      </div>
+
+      <div style={{ marginTop: 24, fontSize: 11, color: "#666" }}>
+        Router: <code>{stack.programs.clearstone_router.toBase58()}</code>
+      </div>
+    </div>
   );
 }
 
-function Section({
-  title,
-  subtitle,
-  children,
-}: {
-  title: string;
-  subtitle?: string;
-  children: React.ReactNode;
-}) {
+function Stat({ label, value }: { label: string; value: bigint }) {
   return (
     <div>
-      <h2 style={{ marginTop: 0, fontSize: 18 }}>{title}</h2>
-      {subtitle && <p style={{ color: "#8a8a8a", fontSize: 13 }}>{subtitle}</p>}
-      <div style={{ display: "grid", gap: 12, maxWidth: 540 }}>{children}</div>
-      <div style={{ marginTop: 24, fontSize: 11, color: "#666" }}>
-        Router: <code>{CLEARSTONE_ROUTER.toBase58()}</code>
+      <div style={{ fontSize: 11, color: "#888", textTransform: "uppercase" }}>
+        {label}
+      </div>
+      <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 14 }}>
+        {value.toString()}
       </div>
     </div>
   );
@@ -97,12 +332,10 @@ function Field({
   label,
   value,
   onChange,
-  placeholder,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
-  placeholder?: string;
 }) {
   return (
     <label style={{ display: "grid", gap: 4, fontSize: 13 }}>
@@ -110,20 +343,79 @@ function Field({
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        style={{
-          background: "#161618",
-          color: "#e8e8e8",
-          border: "1px solid #2a2a2e",
-          padding: "8px 10px",
-          borderRadius: 4,
-          fontFamily: "inherit",
-          fontSize: 13,
-        }}
+        style={inputStyle}
       />
     </label>
   );
 }
+
+function FieldWithMax({
+  label,
+  value,
+  onChange,
+  available,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  available?: bigint;
+}) {
+  const setPct = (pct: number) => {
+    if (available == null) return;
+    const next = (available * BigInt(pct)) / 100n;
+    onChange(next.toString());
+  };
+  return (
+    <label style={{ display: "grid", gap: 4, fontSize: 13 }}>
+      <span style={{ color: "#8a8a8a" }}>
+        {label}
+        {available != null && (
+          <span style={{ marginLeft: 8, color: "#666" }}>
+            avail {available.toString()}
+          </span>
+        )}
+      </span>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          style={{ ...inputStyle, flex: 1 }}
+        />
+        {[25, 50, 100].map((p) => (
+          <button
+            key={p}
+            type="button"
+            onClick={() => setPct(p)}
+            style={pctBtn}
+            disabled={available == null}
+          >
+            {p}%
+          </button>
+        ))}
+      </div>
+    </label>
+  );
+}
+
+const inputStyle: React.CSSProperties = {
+  background: "#161618",
+  color: "#e8e8e8",
+  border: "1px solid #2a2a2e",
+  padding: "8px 10px",
+  borderRadius: 4,
+  fontFamily: "inherit",
+  fontSize: 13,
+};
+
+const pctBtn: React.CSSProperties = {
+  background: "transparent",
+  color: "#8a8a8a",
+  border: "1px solid #2a2a2e",
+  padding: "4px 10px",
+  borderRadius: 4,
+  fontSize: 11,
+  cursor: "pointer",
+};
 
 const btnStyle: React.CSSProperties = {
   background: "#6cf",
@@ -136,14 +428,4 @@ const btnStyle: React.CSSProperties = {
   fontWeight: 600,
   cursor: "pointer",
   width: "max-content",
-};
-
-const statusStyle: React.CSSProperties = {
-  marginTop: 8,
-  fontSize: 12,
-  color: "#8a8a8a",
-  background: "#161618",
-  border: "1px solid #2a2a2e",
-  padding: "8px 12px",
-  borderRadius: 4,
 };

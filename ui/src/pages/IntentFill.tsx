@@ -7,6 +7,7 @@ import {
   hexToBytes,
   orderHash as computeOrderHash,
 } from "../lib/order.js";
+import { formatError } from "../lib/format.js";
 
 // Self-solve intent flow.
 //
@@ -110,7 +111,7 @@ export function IntentFill() {
       });
       setStatus(`signed order. order_hash = ${bytesToHex(hash).slice(0, 16)}…`);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatError(e));
     }
   }
 

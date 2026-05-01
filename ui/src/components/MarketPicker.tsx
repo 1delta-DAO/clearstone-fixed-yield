@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import { useStack } from "../lib/stack-context.js";
+import { formatError } from "../lib/format.js";
 
 // Market picker dropdown.
 //
@@ -93,7 +94,7 @@ export function MarketPicker({ value, onChange, placeholder }: MarketPickerProps
       })
       .catch((e: unknown) => {
         if (!mounted) return;
-        setDiscoveryError(e instanceof Error ? e.message : String(e));
+        setDiscoveryError(formatError(e));
       })
       .finally(() => {
         if (mounted) setLoading(false);

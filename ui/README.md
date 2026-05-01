@@ -6,8 +6,9 @@ A boilerplate React + Vite UI illustrating four flows from
 | Tab                    | What it does                                              | FLOWS.md ref |
 |------------------------|-----------------------------------------------------------|--------------|
 | **Setup**              | Active deployment handles · override via JSON paste · localStorage-persisted. | n/a |
-| **LP provision**       | Stub: PT + SY → LP via `wrapper_provide_liquidity_classic`. Market dropdown auto-discovers all `MarketTwo` accounts on `clearstone_core` via `getProgramAccounts` + Anchor discriminator filter; canonical entry from the active stack is highlighted; "Custom…" allows manual pubkey entry. | §0 |
-| **Buy PT**             | Stub: base → SY → PT via `wrapper_buy_pt`. Same market picker as LP provision. | §1 |
+| **Sourcing**           | **REAL** ixs. Mint SY (`kamino_sy_adapter.mint_sy`) and Strip SY → PT+YT (`core.strip`). Position banner shows live base/SY/PT/YT/LP balances. This is the bootstrap path: USDC-only wallet → ready for LP. | §0 prerequisites |
+| **LP provision**       | **REAL** ix. PT + SY → LP via `wrapper_provide_liquidity_classic`. Reads the chosen `MarketTwo` for `cpi_accounts` / ALT / escrows; SY-CPI extras auto-built from the ALT. Position banner shows live PT/SY/LP balances + % buttons. Market dropdown auto-discovers all `MarketTwo` accounts on `clearstone_core` via `getProgramAccounts` + Anchor discriminator filter. | §0 |
+| **Buy PT**             | **REAL** ix. base → SY → PT via `wrapper_buy_pt`. Hardwired to `generic_exchange_rate_sy` (router wrapper constraint); the page bails out cleanly if `market.sy_program ≠ generic`, prompting a Setup-tab swap to the test stack. Auto-derives `base_vault` PDA + builds SY-CPI extras the same way as LP provision. | §1 |
 | **Self-solve intent**  | Real maker-side ed25519 sign via `wallet.signMessage()` + bundle export; submission stub. | §3a |
 
 The Setup tab loads the canonical Solstice-USDC Kamino stack from
@@ -78,8 +79,8 @@ src/
   App.tsx               4-tab nav, StackContext provider
   pages/
     Setup.tsx           deployment-handle viewer + override
-    LpProvision.tsx     stub (LP add via router wrapper)
-    BuyPt.tsx           stub (base → PT via router wrapper)
+    LpProvision.tsx     real ix (LP add via wrapper_provide_liquidity_classic)
+    BuyPt.tsx           real ix (base → PT via wrapper_buy_pt; generic-adapter only)
     IntentFill.tsx      maker-side sign + (stub) self-solve
   lib/
     deployments.ts      canonical stack snapshot + localStorage
